@@ -9,7 +9,8 @@ Start a project the factory can run on.
 
 ## Before anything
 
-1. Check `gh auth status`. If not logged in, stop and tell the user.
+1. Check `gh auth status`, or that the GitHub MCP tools are available. If
+   neither works, stop and tell the user.
 2. Confirm with the user, in one message: **repo name**, **owner** (default: the
    logged-in account), **visibility** (default: private), **stack**, and
    **one line on what it is**. Creating a repo is visible outside this machine,
@@ -31,8 +32,8 @@ Start a project the factory can run on.
    `main`; the hooks block it, so use the one-off override and tell the user:
    `ALLOW_MAIN=1 git commit ...` and `ALLOW_MAIN=1 SKIP_CHECKS=1 git push`.
    Every later change goes through a branch and PR.
-4. **Create labels:** `spec`, `ready`, `in-progress`, `needs-review`, `blocked`
-   (`gh label create`; ignore "already exists").
+4. **Create labels:** `spec`, `ready`, `in-progress`, `needs-review`, `blocked`,
+   `human-verified` (`gh label create`; ignore "already exists").
 5. **Open the setup issues** with the `to-issues` skill, after the user confirms
    the list. Defaults, in order:
    - Fill in `scripts/check.sh` (install, lint, typecheck, test) and remove its
@@ -40,6 +41,8 @@ Start a project the factory can run on.
      lands, push with `SKIP_CHECKS=1` and expect CI to fail.
    - Choose the stack, record it as the first ADR, and write `skills/code-structure`.
    - Start `GLOSSARY.md` with the core domain terms (`domain-docs`).
+   - Once the app runs: `create-verification-skill` to script launching and
+     driving it.
    - First project rules in `CODING_STANDARDS.md`.
    - If there is a UI: choose the `STYLE.md` mode and main references (record
      both in `AGENTS.md` Conventions), then build design tokens and base styles.

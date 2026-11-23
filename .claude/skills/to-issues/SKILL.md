@@ -34,7 +34,7 @@ Turn a plan into issues an agent can pick up one at a time.
 4. **Create** with `gh issue create` (title, body, labels). Create blockers
    first so you have their numbers, then write `Blocked by #n` into dependent
    issues. Make missing labels with `gh label create` (`spec`, `ready`,
-   `in-progress`, `needs-review`, `blocked`).
+   `in-progress`, `needs-review`, `blocked`, `human-verified`).
 5. Report the issue numbers and links, and which one to start with.
 
 ## Rules
@@ -43,4 +43,6 @@ Turn a plan into issues an agent can pick up one at a time.
 - No vague criteria ("works well"). Each item should be checkable by someone else.
 - Put design intent in the issue (reference file, `STYLE.md`) so the agent doesn't guess.
 - Don't edit or close issues you didn't create unless asked.
-- If `gh` isn't logged in, stop and say so; don't work around it.
+- No `gh`? Use the GitHub MCP tools. If neither is available, stop and say so.
+- Label an issue `human-verified` when a criterion needs the user to check it
+  by hand (hardware, feel, a live demo). Its PRs then use `Refs #n`, not `Closes`.

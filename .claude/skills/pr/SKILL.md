@@ -16,7 +16,7 @@ like "feat:" unless the repo uses them.
 ## Body
 
 ```markdown
-Closes #<n>
+Closes #<n>        <or "Refs #<n>" if the issue is labelled human-verified>
 
 ## Summary
 <the smallest sketch that makes the change clear: pseudocode, a call tree,
@@ -29,6 +29,7 @@ a component tree, or a shallow file tree. Two to ten lines.>
 ## Acceptance criteria
 - [x] <criterion you proved>
 - [ ] <criterion not done, with why>
+- [ ] <criterion only the user can check> (needs you)
 
 ## Merge danger
 **Door:** one-way | two-way   <one-way = hard to undo: data, schemas, public APIs>
@@ -39,10 +40,13 @@ a component tree, or a shallow file tree. Two to ten lines.>
 ## Rules
 
 - Tick a criterion only if the evidence shows it.
+- `human-verified` issue: `Refs #<n>`, never `Closes`, and leave the criteria
+  that need the user unticked with "(needs you)". Only the user closes it.
 - Pick the sketch type that fits: logic as pseudocode, runtime flow as a call
   tree, UI as a component tree, a refactor as a file tree.
 - UI changes: before/after screenshots at mobile and desktop (from `design-review`).
 - No marketing words, no "This PR...", no restating the diff line by line.
+- Run the title and body through `unslop` before posting.
 - Keep it under about 40 lines. Link to `.artifacts/` for detail.
 
 Adapted from Matt Pocock's `pr` skill (MIT), itself based on Dex Horthy's

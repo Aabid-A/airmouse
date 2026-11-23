@@ -14,6 +14,10 @@ give each worker exactly the context it needs, launch it, and keep the board hon
 python3 <skills-dir>/dispatch/board.py --batch 3
 ```
 
+No `gh`? List open issues with the GitHub MCP tools, save them as
+`issues.json` (a list of `{number, title, labels, body, assignees, createdAt}`,
+labels as `{"name": ...}`), then run `board.py --from-file issues.json --batch 3`.
+
 It prints JSON: `batch` (unblocked `ready` issues ranked by how much they
 unblock, with no overlapping `Files:`), `held`, `blocked` and `in_progress`. It
 changes nothing. Default batch is 3; start with 1–2 on a new project.

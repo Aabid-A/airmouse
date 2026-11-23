@@ -9,7 +9,8 @@ Judge the UI by looking at it, not by reading the code.
 
 ## Steps
 
-1. **Run the app** (check `lsof -i :<port>` so you're viewing your own server).
+1. **Run the app**, with the `verify-<app>` skill if the project has one
+   (check `lsof -i :<port>` so you're viewing your own server).
 2. **Capture screenshots** with a browser tool (Playwright, `agent-browser`, or
    the available browser/computer tools) into `.artifacts/<task>/design/`:
    - widths: 375, 768, 1280

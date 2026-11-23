@@ -13,14 +13,18 @@ not imply publishing.
 1. Confirm you're on your task branch, not `main` (`git branch --show-current`).
 2. Review your own diff (`git diff origin/main...`). Remove debug code and
    unrelated edits.
-3. Commit with a clear message. Plain words, imperative, explain why.
+3. Commit with a clear message: imperative, explain why, checked with `unslop`.
+   Write it to a file and use `git commit -F <file>`, so the shell can't mangle it.
 4. `git fetch origin && git rebase origin/main`, then rerun the checks
    (`scripts/check.sh` if the repo has it). Don't ship on red.
 5. `git push -u origin <branch>`. After a rebase of an already-pushed branch,
    `--force-with-lease` only.
 6. **Open the PR** (`gh pr create`). If the work came from an issue, the body
    says `Closes #<n>` and the issue's acceptance criteria are copied in as a
-   checklist, ticked only for what you proved. After opening, swap the issue's
+   checklist, ticked only for what you proved. If the issue is labelled
+   `human-verified`, write `Refs #<n>` instead, leave the criteria that need the
+   user unticked and marked "(needs you)", and never close the issue yourself.
+   After opening, swap the issue's
    label: `gh issue edit <n> --add-label needs-review --remove-label in-progress`.
    Write the title and body with the `pr` skill: a sketch of the change, the
    before/after evidence from `prove`, the criteria, and the merge danger.
