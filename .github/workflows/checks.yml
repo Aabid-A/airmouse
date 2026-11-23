@@ -10,16 +10,22 @@ permissions:
 
 jobs:
   checks:
-    runs-on: ubuntu-latest
+    # macOS arm64 is the target. Linux proves the pure logic imports without macOS.
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-14, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      # Add the runtime your stack needs, e.g.:
-      # - uses: actions/setup-node@v4
-      #   with: { node-version: 20, cache: npm }
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.12"
+          enable-cache: true
 
       - name: Run project checks
         run: bash scripts/check.sh
