@@ -52,3 +52,11 @@ _Avoid_: Anonymous mode, blur mode
 **Camera-on indicator**:
 The always-visible status in the CLI (and Preview) that the camera is capturing.
 _Avoid_: Recording light
+
+**No hand**:
+The state after the Hand has been lost for about 250 ms. The cursor freezes, any drag is released, airmouse stays unpaused, and the Preview says so.
+_Avoid_: Lost, tracking failure
+
+**Calibrate mode**:
+`--calibrate`, a view of the Hand and the Active region used to set rotate, mirror and the region for the camera's position. Applied before the Active region is placed.
+_Avoid_: Setup wizard
