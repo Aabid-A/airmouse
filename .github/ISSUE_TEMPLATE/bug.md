@@ -17,6 +17,11 @@ labels: bug, ready
 ## Evidence
 <!-- Screenshot, log, command output. The fix will add an "after" to match. -->
 
+## Context
+- Type: bug
+- Files:
+<!-- Paths likely involved, comma-separated. Empty = unknown, runs alone. -->
+
 ## Acceptance criteria
 - [ ] The steps above no longer reproduce the bug
 - [ ]

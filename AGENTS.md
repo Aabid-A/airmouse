@@ -38,7 +38,10 @@ Needs `gh` logged in. One issue, one branch, one PR.
    terms in `GLOSSARY.md` and lasting decisions as ADRs.
 2. `/to-spec` writes the spec as an issue labelled `spec`.
 3. `/to-issues` splits it into small issues with acceptance criteria and blockers.
-4. `/pick-issue` takes one and starts the workflow.
+4. `/pick-issue` takes one and starts the workflow. To run several at once,
+   `/dispatch` is the orchestrator: it picks a batch that won't collide, gives
+   each worker a focused brief, launches them after the user's yes, and gets
+   each PR reviewed by a separate context.
 
 New project: `/new-project`. Labels: `spec`, `ready`, `in-progress`,
 `needs-review`, `blocked`. Never create repos, issues or labels the user didn't

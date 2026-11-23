@@ -16,8 +16,16 @@ labels: ready
 ## How it will be proven
 <!-- A test, a screenshot, command output, a before/after pair. -->
 
-## Design / context
-<!-- Links: design-references file, STYLE.md, related issues, docs. -->
+## Context
+- Type: feature
+<!-- feature | ui | bug | refactor | docs -->
+- Files:
+<!-- Paths or folders likely to change, comma-separated. Empty = unknown, runs alone. -->
+- Glossary terms:
+- ADRs:
+- Design references:
+<!-- e.g. sites/fastshot.md (prompt composer); style mode A or B -->
+- Part of spec: <!-- #n or none -->
 
 ## Blocked by
 <!-- "#12" or "none". -->

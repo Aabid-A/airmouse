@@ -22,6 +22,11 @@ Turn a plan into issues an agent can pick up one at a time.
    - **Acceptance criteria:** a checklist of observable results. Include the
      check or evidence that proves it (a test, a screenshot, a command output).
    - **Blocked by:** other issues in this list, by title for now.
+   - **Context** (lets `dispatch` route it and keeps workers from colliding):
+     `Type:` feature, ui, bug, refactor or docs; `Files:` paths or folders
+     likely to change (comma-separated; leave empty only if unknown, and it
+     will then run alone); glossary terms, ADRs, design references and checks
+     that apply.
    - **Labels:** `ready` if it can start now, `blocked` if it waits; plus a type
      such as `enhancement`, `bug` or `documentation`.
 3. **Show the whole list to the user and wait for a yes.** Creating issues is
