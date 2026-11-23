@@ -1,0 +1,36 @@
+name: checks
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # Add the runtime your stack needs, e.g.:
+      # - uses: actions/setup-node@v4
+      #   with: { node-version: 20, cache: npm }
+
+      - name: Run project checks
+        run: bash scripts/check.sh
+
+  pr-hygiene:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Block PRs opened from main
+        run: |
+          if [ "${{ github.head_ref }}" = "main" ] || [ "${{ github.head_ref }}" = "master" ]; then
+            echo "Open PRs from a task branch, not main." >&2
+            exit 1
+          fi

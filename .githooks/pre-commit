@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+# Works for any agent or person: no commits on main.
+# One-off override (e.g. the very first scaffold commit): ALLOW_MAIN=1 git commit ...
+branch="$(git branch --show-current)"
+if { [ "$branch" = "main" ] || [ "$branch" = "master" ]; } && [ "${ALLOW_MAIN:-0}" != "1" ]; then
+  echo "Blocked: committing on $branch. Make a task branch first (new-feature skill)." >&2
+  exit 1
+fi
+exit 0

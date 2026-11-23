@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+# Works for any agent or person: no pushes to main, and run the checks first.
+# One-off override: ALLOW_MAIN=1 / SKIP_CHECKS=1 git push ...
+while read -r _local_ref _local_sha remote_ref _remote_sha; do
+  case "$remote_ref" in
+    refs/heads/main|refs/heads/master)
+      if [ "${ALLOW_MAIN:-0}" != "1" ]; then
+        echo "Blocked: pushing to ${remote_ref#refs/heads/}. Push a task branch and open a PR." >&2
+        exit 1
+      fi ;;
+  esac
+done
+if [ "${SKIP_CHECKS:-0}" != "1" ] && [ -x scripts/check.sh ]; then
+  scripts/check.sh || { echo "Blocked: scripts/check.sh failed." >&2; exit 1; }
+fi
+exit 0
