@@ -64,6 +64,23 @@ def test_720p_is_a_config_option(tmp_path: Path) -> None:
     assert (camera.width, camera.height) == (1280, 720)
 
 
+@pytest.mark.parametrize(
+    ("section", "key", "value"),
+    [
+        ("active_region", "width_fraction", "nan"),
+        ("timing", "unpause_hold_s", "inf"),
+        ("filter", "beta", "-inf"),
+    ],
+)
+def test_non_finite_numbers_are_rejected(
+    tmp_path: Path, section: str, key: str, value: str
+) -> None:
+    path = write(tmp_path, f"[{section}]\n{key} = {value}\n")
+
+    with pytest.raises(ConfigError, match=f"{section}.{key}"):
+        load_config(path)
+
+
 def test_flags_override_the_file(tmp_path: Path) -> None:
     path = write(tmp_path, "[camera]\nindex = 2\nwidth = 640\n")
 

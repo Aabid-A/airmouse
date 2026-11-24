@@ -5,6 +5,7 @@ out-of-range value, unreadable file) raises `ConfigError` naming the key.
 """
 
 import dataclasses
+import math
 import tomllib
 from collections.abc import Mapping
 from dataclasses import dataclass, field
@@ -105,6 +106,8 @@ def _check_value(key: str, spec: dataclasses.Field[Any], value: Any) -> Any:
     if choices is not None and value not in choices:
         valid = ", ".join(str(c) for c in choices)
         raise ConfigError(f"{key}: {value!r} is not valid; valid values are {valid}")
+    if expected is float and not math.isfinite(value):
+        raise ConfigError(f"{key}: {value!r} is not a finite number")
     low, high = spec.metadata.get("low"), spec.metadata.get("high")
     if (low is not None and value < low) or (high is not None and value > high):
         raise ConfigError(f"{key}: {value!r} is out of range ({_range_text(low, high)})")
