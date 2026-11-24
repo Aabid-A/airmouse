@@ -51,13 +51,16 @@ the user didn't confirm. Private by default. Small ad-hoc tasks can skip issues.
 **Human-verified issues** (label `human-verified`) need the user to check
 something by hand, such as hardware, feel or a live demo. For these the PR says
 `Refs #<n>`, never `Closes`, so merging doesn't close the issue. Criteria that
-need the human stay unticked, marked "(needs you)". Only the user closes the
-issue. Every other issue uses `Closes #<n>`.
+need the human stay unticked, marked "(needs you)". An agent may merge the PR
+under the Merging rules; the issue stays open and only the user closes it, after
+testing. Every other issue uses `Closes #<n>`.
 
 **Blockers.** `Blocked by #n` is a hard gate: it holds until issue n is closed.
 A human-verified issue stays open until the user closes it, so it is not listed
 under `Blocked by` unless the user names it as a gate. List it as `Builds on #n`
-instead: start once its PR is merged to `main`, whether or not the issue is closed.
+instead: start once its PR is merged to `main` (agents merge those PRs too),
+whether or not the user has closed the issue. If testing later fails, the fix
+goes in that issue.
 
 ## Workflow
 
@@ -95,13 +98,13 @@ all of these hold on that commit:
   session or a review bot; not the agent that wrote the code), and its result is
   a comment on the PR that names that head commit. A self-review never counts:
   hand the PR to the user.
-- The PR links no `human-verified` issue, whether by `Closes` or `Refs`. For
-  those the user merges, and closes the issue after trying it.
+- A PR for a `human-verified` issue says `Refs`, so merging leaves the issue
+  open. The agent never closes it; the user does, after testing.
 - The PR does not change the rules or brakes: `AGENTS.md`, `CLAUDE.md`,
   `.claude/`, `.agents/`, `.cursor/`, `.githooks/`, `.github/`,
-  `CODING_STANDARDS.md`, `scripts/`, or the
-  dependencies and the build, lint, type and test settings in `pyproject.toml`
-  and `uv.lock`. The user merges those.
+  `CODING_STANDARDS.md` or `scripts/`, and it does not add or remove a
+  dependency (`pyproject.toml` dependency lists, `uv.lock`). The user merges
+  those.
 - The PR's merge danger is a two-way door (a one-way door is a destructive
   action; see below).
 
