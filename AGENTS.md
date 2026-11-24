@@ -89,14 +89,16 @@ all of these hold on that commit:
 
 - Every CI job is green on that head commit (a skipped or cancelled job is not
   green), and there is no merge conflict.
-- The review gate passed from an independent context (not the agent that wrote
-  the code; a self-review never counts), and its result is a comment on the PR
-  that names that head commit.
+- The review gate passed from an independent context (a subagent, another
+  session or a review bot; not the agent that wrote the code), and its result is
+  a comment on the PR that names that head commit. A self-review never counts:
+  hand the PR to the user.
 - The PR links no `human-verified` issue, whether by `Closes` or `Refs`. For
   those the user merges, and closes the issue after trying it.
-- The PR does not change the rules or brakes: `AGENTS.md`, `.claude/`,
-  `.githooks/`, `CODING_STANDARDS.md`, `scripts/`, `.github/workflows/`, or the
-  lint, type and test settings in `pyproject.toml`. The user merges those.
+- The PR does not change the rules or brakes: `AGENTS.md`, `CLAUDE.md`,
+  `.claude/`, `.githooks/`, `.github/`, `CODING_STANDARDS.md`, `scripts/`, or the
+  dependencies and the build, lint, type and test settings in `pyproject.toml`
+  and `uv.lock`. The user merges those.
 - The PR's merge danger is a two-way door (a one-way door is a destructive
   action; see below).
 
@@ -113,7 +115,7 @@ and ask only for:
 2. adding a new dependency;
 3. anything that touches secrets;
 4. a destructive or one-way action (deleting data or branches that hold unmerged
-   work, force-push, a one-way-door merge).
+   work, plain force-push, a one-way-door merge).
 
 For everything else, decide, write the assumption in the PR, and carry on. The
 Never rules in this file still apply.

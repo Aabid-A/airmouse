@@ -31,7 +31,7 @@ not imply publishing.
 7. Run `/review-loop` for code or executable-workflow changes.
 8. If the Merging rules in `AGENTS.md` allow it, merge (squash, pinned to the
    reviewed head commit), confirm the issue closed, and remove the worktree.
-   Otherwise stop. Present the PR URL and the real review result.
+   Otherwise stop. Either way, end with the PR URL and the real review result.
 
 ## Never
 
