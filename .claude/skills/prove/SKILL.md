@@ -12,6 +12,8 @@ A reviewer should be able to see the change work without running it.
 1. **Run the repo checks**: `scripts/check.sh` if present, otherwise the ones in
    `AGENTS.md`. Fix failures. Where the change has a testable seam, write the
    failing test first; a test is the best before/after evidence.
+   If the project has a `verify-<app>` skill, launch and drive the app with it.
+   If it has none and you had to improvise, suggest `create-verification-skill`.
 2. **Capture BEFORE** (cheapest while the bug still exists): reproduce the
    problem and save evidence in `.artifacts/<task>/before.*`.
    - UI: screenshot with whatever the harness offers (a browser tool or computer

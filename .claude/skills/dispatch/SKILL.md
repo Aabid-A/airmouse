@@ -1,6 +1,6 @@
 ---
 name: dispatch
-description: Use when the user wants several issues worked on, or asks to run the board, dispatch work, or assign agents. Acts as the orchestrator - picks a batch of unblocked issues that won't collide, builds a focused context packet for each, launches one worker per issue, tracks them to PR and review, and reports back. Never merges.
+description: Use when the user wants several issues worked on, or asks to run the board, dispatch work, or assign agents. Acts as the orchestrator - picks a batch of unblocked issues that won't collide, builds a focused context packet for each, launches one worker per issue, tracks them to PR and review, and reports back. Merging follows the AGENTS.md Merging rules.
 ---
 
 # Dispatch
@@ -13,6 +13,10 @@ give each worker exactly the context it needs, launch it, and keep the board hon
 ```bash
 python3 <skills-dir>/dispatch/board.py --batch 3
 ```
+
+No `gh`? List open issues with the GitHub MCP tools, save them as
+`issues.json` (a list of `{number, title, labels, body, assignees, createdAt}`,
+labels as `{"name": ...}`), then run `board.py --from-file issues.json --batch 3`.
 
 It prints JSON: `batch` (unblocked `ready` issues ranked by how much they
 unblock, with no overlapping `Files:`), `held`, `blocked` and `in_progress`. It
@@ -73,6 +77,8 @@ open PR with `needs-review`.
 - If a worker is stuck or widens scope, stop it, comment on the issue, and put
   the label back to `ready` or `blocked`.
 - When the batch is done, run `board.py` again: merged work may unblock more.
+- `board.py` reads only `Blocked by`. Before launching an issue, check each
+  `Builds on #n` PR is merged to `main`; hold the issue otherwise.
 
 ## 6. Report
 
@@ -81,7 +87,8 @@ Then suggest the next batch. Run `retro` if a worker went wrong.
 
 ## Never
 
-- Merge, or launch workers without the user's yes for that batch.
+- Launch workers without the user's yes for that batch, or merge outside the
+  `AGENTS.md` Merging rules.
 - Give two workers overlapping files.
 - Hand a worker the whole conversation; give it the packet.
 - Report a PR as done when checks or review haven't passed.

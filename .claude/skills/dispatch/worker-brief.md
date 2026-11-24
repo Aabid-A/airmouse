@@ -31,7 +31,9 @@ Branch: agent/<n>-<slug> in its own worktree, from origin/main.
 Checks: scripts/check.sh must pass. Evidence goes in the PR (pr skill).
 
 ## Stop when
-- The PR is open with "Closes #<n>", checks pass, and the issue is labelled `needs-review`.
+- The PR is open with "Closes #<n>" (or "Refs #<n>" if the issue is labelled
+  `human-verified`, with the user's checks left unticked and marked "(needs you)"),
+  checks pass, and the issue is labelled `needs-review`. Never close the issue.
 - Or you are blocked or the work is bigger than the issue: stop, comment on the
   issue with what you found, and report back. Don't widen the scope.
 

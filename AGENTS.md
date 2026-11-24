@@ -32,7 +32,8 @@ fallback it names, and say in the PR what you could not do.
 
 ## Plan, then track it in issues
 
-Needs `gh` logged in. One issue, one branch, one PR.
+Needs `gh` logged in, or the GitHub MCP tools: wherever a skill says `gh`, use
+the matching MCP tool if `gh` isn't available. One issue, one branch, one PR.
 
 1. `/grill` the idea until every decision is settled; `/domain-docs` records
    terms in `GLOSSARY.md` and lasting decisions as ADRs.
@@ -44,8 +45,22 @@ Needs `gh` logged in. One issue, one branch, one PR.
    each PR reviewed by a separate context.
 
 New project: `/new-project`. Labels: `spec`, `ready`, `in-progress`,
-`needs-review`, `blocked`. Never create repos, issues or labels the user didn't
-confirm. Private by default. Small ad-hoc tasks can skip issues.
+`needs-review`, `blocked`, `human-verified`. Never create repos, issues or labels
+the user didn't confirm. Private by default. Small ad-hoc tasks can skip issues.
+
+**Human-verified issues** (label `human-verified`) need the user to check
+something by hand, such as hardware, feel or a live demo. For these the PR says
+`Refs #<n>`, never `Closes`, so merging doesn't close the issue. Criteria that
+need the human stay unticked, marked "(needs you)". An agent may merge the PR
+under the Merging rules; the issue stays open and only the user closes it, after
+testing. Every other issue uses `Closes #<n>`.
+
+**Blockers.** `Blocked by #n` is a hard gate: it holds until issue n is closed.
+A human-verified issue stays open until the user closes it, so it is not listed
+under `Blocked by` unless the user names it as a gate. List it as `Builds on #n`
+instead: start once its PR is merged to `main` (agents merge those PRs too),
+whether or not the user has closed the issue. If testing later fails, the fix
+goes in that issue.
 
 ## Workflow
 
@@ -56,7 +71,8 @@ confirm. Private by default. Small ad-hoc tasks can skip issues.
 3. **Prove.** Run `scripts/check.sh`. For changed behaviour, `/prove`: the
    failure before the fix and the success after. For UI, `/design-review`.
 4. **Ship.** `/ship`: commit, rebase, push, open the PR (`/pr` writes the body),
-   then `/review-loop` until the gate passes. End with the PR URL.
+   then `/review-loop` until the gate passes. Merge if the Merging rules below
+   allow it; either way end with the PR URL.
 
 When a task went badly, or every few PRs, run `/retro` to improve the setup.
 
@@ -67,7 +83,53 @@ When a task went badly, or every few PRs, run `/retro` to improve the setup.
 - Git hooks (`.githooks/`) and, in Claude Code, a guardrail hook block commits
   on `main`, pushes to `main`, plain force-push, `reset --hard` and `clean -f`.
   Don't work around them; if one blocks you, stop and say why you needed it.
+- Never use an override: `SKIP_CHECKS`, `ALLOW_MAIN`, `--no-verify`, plain
+  force-push. If the check is wrong, fix the check.
 - Review runs on two axes (standards and spec) in `/review-loop`.
+
+## Merging
+
+An agent may merge its own PR (squash, pinned to the reviewed head commit) once
+all of these hold on that commit:
+
+- Every CI job is green on that head commit (a skipped or cancelled job is not
+  green), and there is no merge conflict.
+- The review gate passed from an independent context (a subagent, another
+  session or a review bot; not the agent that wrote the code), and its result is
+  a comment on the PR that names that head commit. A self-review never counts:
+  hand the PR to the user.
+- A PR that links a `human-verified` issue uses only `Refs`, in the PR body and
+  in the squash commit message (never `Closes` or `Fixes`); if not, fix it
+  before merging. Merging then leaves the issue open. The agent never closes
+  it; the user does, after testing.
+- The PR does not change the rules or brakes: `AGENTS.md`, `CLAUDE.md`,
+  `.claude/`, `.agents/`, `.cursor/`, `.githooks/`, `.github/`,
+  `CODING_STANDARDS.md` or `scripts/`, and it does not add or remove a
+  dependency (`pyproject.toml` dependency lists, `uv.lock`). The user merges
+  those.
+- The PR's merge danger is a two-way door (a one-way door is a destructive
+  action; see below).
+
+Never merge on red, stale or missing CI or review, and never use an override
+(`SKIP_CHECKS`, `ALLOW_MAIN`, plain force-push) to get there.
+
+## When to ask the user
+
+Beyond the confirmations this file already requires (creating repos, issues or
+labels; launching `/dispatch` workers; stopping when a brake blocks you), stop
+and ask only for:
+
+1. the same failure twice (same cause, after a real attempt to fix it);
+2. adding a new dependency;
+3. anything that touches secrets;
+4. a destructive or one-way action (deleting data or branches that hold unmerged
+   work, plain force-push, a one-way-door merge).
+
+For everything else, decide, write the assumption in the PR, and carry on. The
+Never rules in this file still apply.
+
+Before escalating a CI or tooling failure, search the web and the GitHub
+changelog (https://github.blog/changelog/) for the cause, and say what you found.
 
 ## Multi-agent rules
 
@@ -79,7 +141,7 @@ When a task went badly, or every few PRs, run `/retro` to improve the setup.
 - Worktrees don't isolate ports or databases. Confirm a port answers your
   process; no schema experiments on a shared database.
 - Regenerate lockfiles on conflict; never hand-merge them.
-- Don't merge a PR unless asked. Keep the worktree until it is merged or closed.
+- Merge only as the Merging rules allow. Keep the worktree until it is merged or closed.
 
 ## Periodic: untangle the codebase
 
@@ -96,6 +158,7 @@ and ask before it removes comments or tests.
 - For UI changes, `/design-review` screenshots are in the PR.
 - The review gate passed, or you report the real result and what is open.
   Never claim success you didn't get.
+- The PR is merged under the Merging rules, or handed to the user with its URL.
 
 ## Conventions
 

@@ -34,12 +34,29 @@ Baseline smells are always judgement calls. Skip what tooling enforces. Under
 400 words."
 
 **Spec review.** Give it the diff and the spec: the issue named in `Closes #n`
-(`gh issue view <n>`), a linked spec issue, or a spec file. Brief: "Report
+or `Refs #n` (`gh issue view <n>`), a linked spec issue, or a spec file. For a
+`human-verified` issue, criteria marked "(needs you)" are not findings; the
+reviewer checks everything else. Brief: "Report
 (a) acceptance criteria missing or partial, (b) behaviour nobody asked for
 (scope creep), (c) criteria that look done but are wrong. Quote the criterion
 for each. Under 400 words." If there is no spec, skip it and say so.
 
 Report both under `## Standards` and `## Spec`. Don't merge or rerank them.
+
+**Bugs need proof.** A finding that says the code is *wrong* (crashes, wrong
+result, broken criterion, security hole) counts only with a run that shows it:
+a failing test, a repro script, or command output, run against the real code in
+the reviewer's own worktree. Unproven bug claims are listed separately as
+"unproven" and don't block. Standards findings and smells are judgement calls
+and need no run, but are labelled as such.
+
+**Risky diffs get a safety check.** When the PR's merge danger is a one-way
+door or a wide blast radius (data, schemas, public APIs, shared state), the
+reviewer also: finds the one fact the change is safe because of (for example
+"this only drops entries that are already dead"), proves it by running real
+code, and lists what else could break beyond the diff (other callers, stored
+data, wire formats, timing). Report how far the proof got: said, pointed at the
+line, reasoned through, ran it, or reproduced it in the app.
 
 ### B. Review bot (e.g. Greptile)
 
@@ -58,6 +75,12 @@ spec review as well; bots rarely know the spec.
 
 ## After it passes
 
+Post the result as a comment on the PR: the head commit, each axis (standards,
+spec) with pass or fail, and any "unproven" findings. A merge under the
+`AGENTS.md` Merging rules needs this comment on the current head. A new push
+makes it stale. A review you did yourself (the last resort above) is not
+independent: say so in the comment and leave the merge to the user.
+
 If a finding was something a tool could have caught, say so in the PR and
 suggest a check (see the `retro` skill). That is how the brakes improve.
 
@@ -65,3 +88,7 @@ suggest a check (see the `retro` skill). That is how the brakes improve.
 
 At the cap, a timeout, or a missing integration: stop and report the real
 result, the open findings and what is left. Don't raise the cap or claim success.
+
+Two-axis review adapted from Matt Pocock's `code-review` skill (MIT). Proof rule and
+safety check adapted from pstack's `interrogate` and `blast-radius` skills by
+Lauren Tan (MIT).
