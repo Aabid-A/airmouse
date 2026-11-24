@@ -3,7 +3,7 @@
 This is the one place rotate and mirror are defined. `prepare_frame` turns a
 camera frame into the prepared frame the tracker and the Preview see.
 `prepare_point` is the same transform on one normalised point, for anything
-that holds raw-frame coordinates (the cursor mapping will reuse it). A test
+that holds raw-frame coordinates. A test
 proves the two agree, so they cannot drift. The Active region is placed in the
 prepared frame, after this step.
 """
@@ -55,3 +55,8 @@ def active_region(
     height = width * frame_width / screen_aspect / frame_height
     left, top = (1 - width) / 2, (1 - height) / 2
     return (left, top, left + width, top + height)
+
+
+def prepared_frame_size(width: int, height: int, rotate: int) -> tuple[int, int]:
+    """The (width, height) of a `width` by `height` camera frame after rotating it."""
+    return (height, width) if (rotate // 90) % 2 else (width, height)

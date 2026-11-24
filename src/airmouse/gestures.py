@@ -13,6 +13,7 @@ type Landmarks = Sequence[Point]
 LANDMARK_COUNT = 21
 WRIST = 0
 THUMB_TIP = 4
+POINTER = 8  # the index fingertip; its position drives the cursor
 INDEX_MCP = 5
 MIDDLE_MCP = 9
 FINGER_TIPS = (8, 12, 16, 20)

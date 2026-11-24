@@ -17,7 +17,7 @@ from airmouse.config import CameraConfig, Config
 from airmouse.frame import active_region
 from airmouse.gestures import Landmarks
 from airmouse.renderer import PALETTE, REGION_OUTLINE, WIDTH, Image, render_calibrate
-from hands import open_hand
+from hands import open_hand, pointing_hand
 
 FRAME_S = 1 / 30
 
@@ -276,3 +276,45 @@ def test_calibrate_follows_the_rotated_frame() -> None:
         active_region(480, 640, 0.6), landmarks=open_hand(), camera_on=True, fps=None
     )
     assert window.images[0].pixels == expected.pixels
+
+
+class RecordingOutput:
+    def __init__(self) -> None:
+        self.moves: list[tuple[float, float]] = []
+
+    def move_cursor(self, x: float, y: float) -> None:
+        self.moves.append((x, y))
+
+    def release_drag(self) -> None:
+        pass
+
+
+class PalmThenPointing:
+    """An open palm for the first `palm_s` seconds, then a pointing Hand."""
+
+    def __init__(self, palm_s: float) -> None:
+        self.palm_s = palm_s
+        self.closed = False
+
+    def track(self, frame: Any, time_s: float) -> Landmarks | None:
+        return open_hand() if time_s < self.palm_s else pointing_hand()
+
+    def close(self) -> None:
+        self.closed = True
+
+
+def test_the_cursor_moves_only_once_the_open_palm_has_unpaused() -> None:
+    output = RecordingOutput()
+
+    run_preview(
+        Config(),
+        FakeCamera(),
+        PalmThenPointing(palm_s=1.5),
+        FakeWindow(frames=90),
+        output=output,
+        display=(1600.0, 1000.0),
+        clock=Clock(),
+        out=io.StringIO(),
+    )
+
+    assert 0 < len(output.moves) < 90 - 40

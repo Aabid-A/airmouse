@@ -21,6 +21,10 @@ SNAPSHOTS = Path(__file__).parent / "snapshots"
 class FakeOutput:
     def __init__(self) -> None:
         self.commands: list[str] = []
+        self.moves: list[tuple[float, float]] = []
+
+    def move_cursor(self, x: float, y: float) -> None:
+        self.moves.append((x, y))
 
     def release_drag(self) -> None:
         self.commands.append("release_drag")
