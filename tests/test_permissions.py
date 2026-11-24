@@ -4,7 +4,7 @@ from dataclasses import dataclass
 import pytest
 
 from airmouse.cli import main
-from airmouse.permissions import MacPermissionProbe, check_permissions
+from airmouse.permissions import _CAMERA_STATUS_SNIPPET, MacPermissionProbe, check_permissions
 
 
 @dataclass
@@ -134,3 +134,9 @@ def test_an_aborted_camera_check_is_not_a_missing_permission(
     err = capsys.readouterr().err
     assert "could not check the Camera permission" in err
     assert "not a missing permission" in err
+
+
+def test_camera_snippet_asks_for_the_video_media_type() -> None:
+    # AVMediaTypeVideo is "vide". A wrong string makes AVFoundation raise and abort.
+    assert 'b"vide"' in _CAMERA_STATUS_SNIPPET
+    assert 'b"vid"' not in _CAMERA_STATUS_SNIPPET

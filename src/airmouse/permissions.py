@@ -42,7 +42,7 @@ send = objc.objc_msgSend
 send.restype = ctypes.c_void_p
 send.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_char_p]
 video = send(
-    objc.objc_getClass(b"NSString"), objc.sel_registerName(b"stringWithUTF8String:"), b"vid"
+    objc.objc_getClass(b"NSString"), objc.sel_registerName(b"stringWithUTF8String:"), b"vide"
 )
 send.restype = ctypes.c_long
 send.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p]
