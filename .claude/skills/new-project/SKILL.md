@@ -25,7 +25,7 @@ Start a project the factory can run on.
    (use `--public` only if the user asked).
 2. **Install the factory:** `<factory>/install.sh repo <project> --target <t>`
    for the user's harness (`claude`, `agents`, `cursor`, `all`). It adds
-   `AGENTS.md`, skills, `design-references/`, `.github/` templates and CI,
+   `AGENTS.md`, skills, `.github/` templates and CI,
    `CODING_STANDARDS.md`, `scripts/check.sh` and the git hooks.
 3. **Write a short `README.md`** (one-line description, stack, how to run) and
    a `.gitignore` for the stack. This first scaffold is the only commit on
@@ -46,8 +46,8 @@ Start a project the factory can run on.
    - Once the app runs: `create-verification-skill` to script launching and
      driving it.
    - First project rules in `CODING_STANDARDS.md`.
-   - If there is a UI: choose the `STYLE.md` mode and main references (record
-     both in `AGENTS.md` Conventions), then build design tokens and base styles.
+   - If there is a UI: choose the visual style and main references (record
+     both in `AGENTS.md` Conventions or the README), then build design tokens and base styles.
    - First vertical slice of the product (better: `grill`, then `to-spec`).
 6. **Push and report:** the repo URL, the issue list, and which issue to take
    first with `pick-issue`.
