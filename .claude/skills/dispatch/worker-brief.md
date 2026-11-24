@@ -22,8 +22,8 @@ Part of spec #<s>: <the 3–10 spec lines that matter for this issue, or "none">
 - Don't touch: <paths other workers own in this batch>
 
 ## Look and feel (UI only)
-- Style mode: <A quiet light | B cinematic dark> (design-references/STYLE.md)
-- References: <sites/x.md: the parts to reuse>
+- Style: <the project's chosen style>
+- References: <sites or screenshots to match: the parts to reuse>
 
 ## How to work
 Follow AGENTS.md. Skills, in order: <from the dispatch table>.

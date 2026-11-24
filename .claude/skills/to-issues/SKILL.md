@@ -44,7 +44,7 @@ Turn a plan into issues an agent can pick up one at a time.
 
 - Small beats complete. If an issue needs more than one PR, split it.
 - No vague criteria ("works well"). Each item should be checkable by someone else.
-- Put design intent in the issue (reference file, `STYLE.md`) so the agent doesn't guess.
+- Put design intent in the issue (a reference, or the style named in the README) so the agent doesn't guess.
 - Don't edit or close issues you didn't create unless asked.
 - No `gh`? Use the GitHub MCP tools. If neither is available, stop and say so.
 - Label an issue `human-verified` when a criterion needs the user to check it

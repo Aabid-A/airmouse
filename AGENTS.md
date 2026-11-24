@@ -20,7 +20,6 @@ fallback it names, and say in the PR what you could not do.
 - `docs/adr/`: decisions and why. Don't undo one silently.
 - `CODING_STANDARDS.md`: judgement-call rules, applied in review.
 - `scripts/check.sh`: the one command that proves a change works.
-- `design-references/`: the look to match for UI work.
 
 ## Pick the parts that fit the task
 
@@ -107,6 +106,10 @@ all of these hold on that commit:
   `CODING_STANDARDS.md` or `scripts/`, and it does not add or remove a
   dependency (`pyproject.toml` dependency lists, `uv.lock`). The user merges
   those.
+- The PR does not loosen lint, type or test rules: no new ignores or excludes
+  (in config, or inline as `# noqa`, `# type: ignore` or `# pyright: ignore`),
+  no lower thresholds, and no skipped, xfail or removed tests. The user merges
+  those.
 - The PR's merge danger is a two-way door (a one-way door is a destructive
   action; see below).
 
@@ -165,8 +168,8 @@ and ask before it removes comments or tests.
 <!-- Fill in per project: language/runtime, architecture, anything unusual. -->
 - Branch prefix: `agent/`
 - Review gate: A (two-axis review). See `skills/review-loop/SKILL.md`.
-- Style mode: <!-- A quiet light | B cinematic dark; see design-references/STYLE.md -->
-- Main references: <!-- e.g. vortex-studio-hero, fastshot; see design-references/INDEX.md -->
+- Style mode: <!-- the project's visual style, if it has a UI -->
+- Main references: <!-- sites or screenshots to match, if any -->
 
 ## Checks in this repo
 

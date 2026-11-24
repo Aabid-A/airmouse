@@ -38,7 +38,7 @@ Fill in [worker-brief.md](worker-brief.md) for each issue. Include only:
 - the issue text and acceptance criteria, and the spec it is part of, if any
 - the `GLOSSARY.md` terms and ADRs it names (paste the relevant lines, not whole files)
 - the files to start from, and the checks to run
-- for UI: the style mode, the named `design-references/sites/*.md`, and the `ui-design` skill
+- for UI: the project's chosen style, any references it names, and the `ui-design` skill
 - the skills for its type (table below)
 
 Leave out everything else: other issues, this conversation, unrelated docs.

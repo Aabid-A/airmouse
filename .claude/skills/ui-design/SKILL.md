@@ -1,6 +1,6 @@
 ---
 name: ui-design
-description: Use when building or changing any user-facing UI (pages, components, forms, emails, dashboards). Sets the visual and UX standard - clean, calm, consistent - and requires design tokens, all UI states, and accessibility. Taste comes from design-references/STYLE.md.
+description: Use when building or changing any user-facing UI (pages, components, forms, emails, dashboards). Sets the visual and UX standard - clean, calm, consistent - and requires design tokens, all UI states, and accessibility. Taste comes from the project's own style decision.
 ---
 
 # UI Design
@@ -11,17 +11,14 @@ where the project has no convention.
 
 ## Taste
 
-Lives in `design-references/STYLE.md` (principles plus two modes: quiet light
-and cinematic dark). Before UI work:
+Taste is the project's own. Before UI work:
 
-1. Read `design-references/INDEX.md` and `STYLE.md`.
-2. Use the project's chosen mode (in `AGENTS.md` Conventions). If none is chosen,
-   ask the user, and record the answer there.
-3. Open the summaries in `sites/` that match the task's use case. Take parts,
-   structure and feel, not a copy of a page. Open `prompts/` only for exact values.
-4. Prefer references whose **weight** suits the page: light for fast, mobile-first pages.
+1. Find the project's chosen style (in `AGENTS.md` Conventions or the README).
+   If none is chosen, ask the user, and record the answer there.
+2. Match any references the project names (sites, screenshots). Take parts,
+   structure and feel, not a copy of a page.
 
-If there is no `design-references/` folder: minimal and quiet, few colours, one
+If the project has no style yet: minimal and quiet, few colours, one
 accent, hierarchy through size and spacing, no decorative gradients or shadows.
 
 ## Rules
