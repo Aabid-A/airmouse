@@ -87,23 +87,27 @@ When a task went badly, or every few PRs, run `/retro` to improve the setup.
 An agent may merge its own PR (squash, pinned to the reviewed head commit) once
 all of these hold on that commit:
 
-- CI is green on every job, and there is no merge conflict.
+- Every CI job is green on that head commit (a skipped or cancelled job is not
+  green), and there is no merge conflict.
 - The review gate passed from an independent context (not the agent that wrote
-  the code), and its result is recorded as a comment on the PR.
-- The issue is not labelled `human-verified`. For those the user merges, and
-  closes the issue after trying it.
+  the code; a self-review never counts), and its result is a comment on the PR
+  that names that head commit.
+- The PR links no `human-verified` issue, whether by `Closes` or `Refs`. For
+  those the user merges, and closes the issue after trying it.
 - The PR does not change the rules or brakes: `AGENTS.md`, `.claude/`,
-  `.githooks/`, `CODING_STANDARDS.md`, `scripts/check.sh` or `.github/workflows/`.
-  The user merges those.
-- The PR's merge danger is a two-way door. A one-way door is a destructive
-  action: ask.
+  `.githooks/`, `CODING_STANDARDS.md`, `scripts/`, `.github/workflows/`, or the
+  lint, type and test settings in `pyproject.toml`. The user merges those.
+- The PR's merge danger is a two-way door (a one-way door is a destructive
+  action; see below).
 
 Never merge on red, stale or missing CI or review, and never use an override
-(`SKIP_CHECKS`, `ALLOW_MAIN`, force-push) to get there.
+(`SKIP_CHECKS`, `ALLOW_MAIN`, plain force-push) to get there.
 
 ## When to ask the user
 
-Stop and ask only for:
+Beyond the confirmations this file already requires (creating repos, issues or
+labels; launching `/dispatch` workers; stopping when a brake blocks you), stop
+and ask only for:
 
 1. the same failure twice (same cause, after a real attempt to fix it);
 2. adding a new dependency;
@@ -112,12 +116,10 @@ Stop and ask only for:
    work, force-push, a one-way-door merge).
 
 For everything else, decide, write the assumption in the PR, and carry on. The
-confirmations and Never rules elsewhere in this file still apply.
+Never rules in this file still apply.
 
 Before escalating a CI or tooling failure, search the web and the GitHub
 changelog (https://github.blog/changelog/) for the cause, and say what you found.
-A retired runner image, a deprecated action or a changed default is often the
-whole story.
 
 ## Multi-agent rules
 

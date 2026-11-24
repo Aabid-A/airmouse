@@ -1,6 +1,6 @@
 ---
 name: ship
-description: Use when a code change is done and proven and the task calls for a pull request. Commits, rebases, pushes, opens the PR with evidence, runs the review loop, and ends by giving the PR URL. Never merges.
+description: Use when a code change is done and proven and the task calls for a pull request. Commits, rebases, pushes, opens the PR with evidence, runs the review loop, and ends by giving the PR URL. Merges only under the AGENTS.md Merging rules.
 ---
 
 # Ship

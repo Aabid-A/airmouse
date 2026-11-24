@@ -1,6 +1,6 @@
 ---
 name: dispatch
-description: Use when the user wants several issues worked on, or asks to run the board, dispatch work, or assign agents. Acts as the orchestrator - picks a batch of unblocked issues that won't collide, builds a focused context packet for each, launches one worker per issue, tracks them to PR and review, and reports back. Never merges.
+description: Use when the user wants several issues worked on, or asks to run the board, dispatch work, or assign agents. Acts as the orchestrator - picks a batch of unblocked issues that won't collide, builds a focused context packet for each, launches one worker per issue, tracks them to PR and review, and reports back. Merging follows the AGENTS.md Merging rules.
 ---
 
 # Dispatch
