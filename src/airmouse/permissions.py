@@ -30,7 +30,7 @@ class MacPermissionProbe:
     def accessibility_granted(self) -> bool:
         library = ctypes.util.find_library("ApplicationServices")
         if library is None:
-            return False
+            raise OSError("the ApplicationServices framework was not found")
         services = ctypes.cdll.LoadLibrary(library)
         services.AXIsProcessTrusted.restype = ctypes.c_bool
         return bool(services.AXIsProcessTrusted())
@@ -39,7 +39,10 @@ class MacPermissionProbe:
         # AVAuthorizationStatus: 0 not determined, 1 restricted, 2 denied, 3 authorized.
         # "Not determined" passes: macOS asks the terminal app when the camera first opens.
         objc = ctypes.cdll.LoadLibrary(ctypes.util.find_library("objc") or "libobjc.dylib")
-        ctypes.cdll.LoadLibrary(ctypes.util.find_library("AVFoundation") or "AVFoundation")
+        ctypes.cdll.LoadLibrary(
+            ctypes.util.find_library("AVFoundation")
+            or "/System/Library/Frameworks/AVFoundation.framework/AVFoundation"
+        )
         objc.objc_getClass.restype = ctypes.c_void_p
         objc.objc_getClass.argtypes = [ctypes.c_char_p]
         objc.sel_registerName.restype = ctypes.c_void_p
@@ -60,10 +63,6 @@ class MacPermissionProbe:
         return status not in (1, 2)
 
 
-def default_probe() -> PermissionProbe:
-    return MacPermissionProbe()
-
-
 def _message(permission: str, pane: str) -> str:
     return (
         f"airmouse needs the {permission} permission.\n"
@@ -73,15 +72,32 @@ def _message(permission: str, pane: str) -> str:
     )
 
 
+def _unreadable(permission: str, error: OSError) -> str:
+    return (
+        f"airmouse could not check the {permission} permission: {error}\n"
+        f"This is a problem reading macOS, not a missing permission."
+    )
+
+
 def check_permissions(probe: PermissionProbe) -> str | None:
-    """Return a message for the first missing permission, or None when all are granted."""
-    if not probe.accessibility_granted():
-        return _message("Accessibility", "Accessibility")
-    if not probe.camera_granted():
-        return _message("Camera", "Camera")
+    """Return a message for the first missing permission, or None when all are granted.
+
+    A probe that cannot read the status says so, instead of claiming a permission is missing.
+    """
+    checks = (
+        ("Accessibility", probe.accessibility_granted),
+        ("Camera", probe.camera_granted),
+    )
+    for permission, granted in checks:
+        try:
+            ok = granted()
+        except OSError as error:
+            return _unreadable(permission, error)
+        if not ok:
+            return _message(permission, permission)
     return None
 
 
 def platform_probe_or_none() -> PermissionProbe | None:
     """The real probe on macOS; None elsewhere (nothing to check yet)."""
-    return default_probe() if sys.platform == "darwin" else None
+    return MacPermissionProbe() if sys.platform == "darwin" else None
