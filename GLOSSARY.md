@@ -6,8 +6,12 @@ processing stays on the laptop.
 ## Language
 
 **Hand**:
-The single hand airmouse tracks, as 21 landmarks from MediaPipe Hands.
+The single hand airmouse tracks, as 21 landmarks from MediaPipe's HandLandmarker (Tasks API).
 _Avoid_: Palm (only the open palm gesture), user
+
+**Hand model**:
+The vendored `hand_landmarker.task` file (a palm detector plus a 21-landmark model) that the HandLandmarker loads. It ships inside the package, so airmouse never downloads it.
+_Avoid_: Model file, weights
 
 **Pointer**:
 The index fingertip landmark, which drives the cursor.
