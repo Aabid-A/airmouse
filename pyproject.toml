@@ -1,0 +1,47 @@
+[project]
+name = "airmouse"
+version = "0.1.0"
+description = "Control your Mac's cursor by moving your hand in the air, using your webcam."
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+requires-python = ">=3.12"
+dependencies = [
+    # macOS only: the cursor output. Linux and CI import the pure logic without it.
+    "pyobjc-framework-Quartz>=10; sys_platform == 'darwin'",
+]
+
+[project.scripts]
+airmouse = "airmouse.cli:main"
+
+[dependency-groups]
+dev = [
+    "pyright>=1.1.380",
+    "pytest>=8",
+    "ruff>=0.6",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/airmouse"]
+
+[tool.ruff]
+line-length = 100
+src = ["src", "tests"]
+# The factory's own scripts and hooks are not project code.
+extend-exclude = [".claude"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+
+[tool.pyright]
+include = ["src", "tests"]
+pythonVersion = "3.12"
+typeCheckingMode = "standard"
+strict = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

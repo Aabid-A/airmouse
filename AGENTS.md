@@ -107,4 +107,4 @@ and ask before it removes comments or tests.
 
 ## Checks in this repo
 
-- `scripts/check.sh` (fill in its install, lint, typecheck and test lines)
+- `scripts/check.sh`: whitespace, `uv sync --locked`, `ruff check`, `ruff format --check`, `pyright`, `pytest`.
