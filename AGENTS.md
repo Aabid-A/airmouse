@@ -98,8 +98,10 @@ all of these hold on that commit:
   session or a review bot; not the agent that wrote the code), and its result is
   a comment on the PR that names that head commit. A self-review never counts:
   hand the PR to the user.
-- A PR for a `human-verified` issue says `Refs`, so merging leaves the issue
-  open. The agent never closes it; the user does, after testing.
+- A PR that links a `human-verified` issue uses only `Refs`, in the PR body and
+  in the squash commit message (never `Closes` or `Fixes`); if not, fix it
+  before merging. Merging then leaves the issue open. The agent never closes
+  it; the user does, after testing.
 - The PR does not change the rules or brakes: `AGENTS.md`, `CLAUDE.md`,
   `.claude/`, `.agents/`, `.cursor/`, `.githooks/`, `.github/`,
   `CODING_STANDARDS.md` or `scripts/`, and it does not add or remove a
