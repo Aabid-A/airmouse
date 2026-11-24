@@ -4,11 +4,23 @@ import argparse
 import sys
 from collections.abc import Sequence
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
 
 from airmouse import __version__
-from airmouse.config import CONTROL_MODES, ROTATIONS, ConfigError, format_config, load_config
+from airmouse.app import run_live_preview
+from airmouse.config import (
+    CONTROL_MODES,
+    ROTATIONS,
+    Config,
+    ConfigError,
+    format_config,
+    load_config,
+)
 from airmouse.permissions import PermissionProbe, check_permissions, platform_probe_or_none
+
+
+class PreviewRunner(Protocol):
+    def __call__(self, config: Config, *, show_camera_image: bool) -> int: ...
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -44,6 +56,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--control-mode", metavar="MODE", help=f"one of: {', '.join(CONTROL_MODES)}"
     )
+    parser.add_argument(
+        "--show-camera-image",
+        action="store_true",
+        help="show the camera image in the Preview (default: only the skeleton on a plain "
+        "background, so no face or room appears)",
+    )
     return parser
 
 
@@ -65,7 +83,12 @@ def _overrides(args: argparse.Namespace) -> dict[str, dict[str, Any]]:
     return overrides
 
 
-def main(argv: Sequence[str] | None = None, probe: PermissionProbe | None = None) -> int:
+def main(
+    argv: Sequence[str] | None = None,
+    probe: PermissionProbe | None = None,
+    preview: PreviewRunner | None = None,
+) -> int:
+    """Run the command. `probe` and `preview` are for tests; they default to the real ones."""
     parser = build_parser()
     args = parser.parse_args(argv)
     try:
@@ -81,6 +104,5 @@ def main(argv: Sequence[str] | None = None, probe: PermissionProbe | None = None
         if problem:
             print(problem, file=sys.stderr)
             return 1
-    # Nothing to run yet: later issues add the camera, tracker and cursor output.
-    parser.print_help()
-    return 0
+    run = preview or run_live_preview
+    return run(config, show_camera_image=args.show_camera_image)

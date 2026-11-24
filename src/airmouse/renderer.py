@@ -1,8 +1,9 @@
 """Preview rendering: state in, image out. Pure, so it can be snapshot-tested.
 
 The Preview is drawn on a plain near-black background and never contains camera
-pixels (ADR 0001). This is the smallest version: a state label and the Hold
-ring. The privacy preview (#6) extends it with the skeleton and Active region.
+pixels (ADR 0001) unless the caller passes a camera image AND explicitly opts in
+with `show_camera_image=True`. It shows the Hand skeleton, the Camera-on
+indicator, an FPS readout, a state label and the Hold ring.
 The only dependency is the standard library, so PNGs are written by hand.
 """
 
@@ -12,6 +13,7 @@ import zlib
 from dataclasses import dataclass
 
 from airmouse.controller import State
+from airmouse.gestures import LANDMARK_COUNT, Landmarks
 
 WIDTH = 320
 HEIGHT = 240
@@ -23,21 +25,76 @@ TEXT_PAUSED: Colour = (230, 180, 60)
 TEXT_ACTIVE: Colour = (90, 200, 120)
 RING_FILLED: Colour = (230, 180, 60)
 RING_TRACK: Colour = (60, 60, 60)
+BONE: Colour = (60, 110, 150)
+JOINT: Colour = (210, 225, 240)
+POINTER_COLOUR: Colour = (110, 230, 255)
+CAMERA_ON_DOT: Colour = (235, 70, 70)
+STATUS_TEXT: Colour = (150, 150, 150)
+
+# Every colour the Privacy preview can contain. A test uses it to prove no camera pixel gets in.
+PALETTE = frozenset(
+    {
+        BACKGROUND,
+        TEXT_PAUSED,
+        TEXT_ACTIVE,
+        RING_FILLED,
+        RING_TRACK,
+        BONE,
+        JOINT,
+        POINTER_COLOUR,
+        CAMERA_ON_DOT,
+        STATUS_TEXT,
+    }
+)
+
+# MediaPipe's hand skeleton: pairs of landmark indices (0 is the wrist, 4/8/12/16/20 the tips).
+HAND_CONNECTIONS: tuple[tuple[int, int], ...] = (
+    (0, 1), (1, 2), (2, 3), (3, 4),  # thumb
+    (0, 5), (5, 6), (6, 7), (7, 8),  # index finger
+    (9, 10), (10, 11), (11, 12),  # middle finger
+    (13, 14), (14, 15), (15, 16),  # ring finger
+    (17, 18), (18, 19), (19, 20),  # little finger
+    (5, 9), (9, 13), (13, 17), (0, 17),  # palm
+)  # fmt: skip
+POINTER_INDEX = 8  # the index fingertip
+BONE_RADIUS = 1
+JOINT_RADIUS = 3
+POINTER_RADIUS = 5
+
+INDICATOR_SCALE = 2
+INDICATOR_MARGIN = 10
+CAMERA_DOT_RADIUS = 4
 
 RING_CENTRE = (WIDTH // 2, 95)
 RING_INNER = 55
 RING_OUTER = 68
-LABEL_TOP = 175
-LABEL_SCALE = 4
+LABEL_TOP = 216
+LABEL_SCALE = 2
 
-# 5x7 glyphs, one string per row, for the letters the state labels need.
+# 5x7 glyphs, one string per row, for the characters the labels and readouts need.
 FONT: dict[str, tuple[str, ...]] = {
+    " ": (".....",) * 7,
+    "0": (".###.", "#...#", "#..##", "#.#.#", "##..#", "#...#", ".###."),
+    "1": ("..#..", ".##..", "..#..", "..#..", "..#..", "..#..", ".###."),
+    "2": (".###.", "#...#", "....#", "...#.", "..#..", ".#...", "#####"),
+    "3": ("#####", "...#.", "..#..", "...#.", "....#", "#...#", ".###."),
+    "4": ("...#.", "..##.", ".#.#.", "#..#.", "#####", "...#.", "...#."),
+    "5": ("#####", "#....", "####.", "....#", "....#", "#...#", ".###."),
+    "6": ("..##.", ".#...", "#....", "####.", "#...#", "#...#", ".###."),
+    "7": ("#####", "....#", "...#.", "..#..", ".#...", ".#...", ".#..."),
+    "8": (".###.", "#...#", "#...#", ".###.", "#...#", "#...#", ".###."),
+    "9": (".###.", "#...#", "#...#", ".####", "....#", "...#.", ".##.."),
     "A": (".###.", "#...#", "#...#", "#####", "#...#", "#...#", "#...#"),
     "C": (".###.", "#...#", "#....", "#....", "#....", "#...#", ".###."),
     "D": ("####.", "#...#", "#...#", "#...#", "#...#", "#...#", "####."),
     "E": ("#####", "#....", "#....", "####.", "#....", "#....", "#####"),
+    "F": ("#####", "#....", "#....", "####.", "#....", "#....", "#...."),
     "I": ("#####", "..#..", "..#..", "..#..", "..#..", "..#..", "#####"),
+    "M": ("#...#", "##.##", "#.#.#", "#.#.#", "#...#", "#...#", "#...#"),
+    "N": ("#...#", "##..#", "#.#.#", "#..##", "#...#", "#...#", "#...#"),
+    "O": (".###.", "#...#", "#...#", "#...#", "#...#", "#...#", ".###."),
     "P": ("####.", "#...#", "#...#", "####.", "#....", "#....", "#...."),
+    "R": ("####.", "#...#", "#...#", "####.", "#.#..", "#..#.", "#...#"),
     "S": (".####", "#....", "#....", ".###.", "....#", "....#", "####."),
     "T": ("#####", "..#..", "..#..", "..#..", "..#..", "..#..", "..#.."),
     "U": ("#...#", "#...#", "#...#", "#...#", "#...#", "#...#", ".###."),
@@ -87,14 +144,41 @@ def _chunk(kind: bytes, data: bytes) -> bytes:
     return struct.pack(">I", len(data)) + body + struct.pack(">I", zlib.crc32(body))
 
 
-def render_preview(state: State, hold_progress: float = 0.0) -> Image:
-    """The Preview for a state. `hold_progress` (0 to 1) fills the Hold ring while Paused."""
-    image = Image.blank(WIDTH, HEIGHT, BACKGROUND)
+def render_preview(
+    state: State,
+    hold_progress: float = 0.0,
+    *,
+    landmarks: Landmarks | None = None,
+    camera_on: bool = False,
+    fps: float | None = None,
+    camera_image: Image | None = None,
+    show_camera_image: bool = False,
+) -> Image:
+    """The Preview for a state.
+
+    `hold_progress` (0 to 1) fills the Hold ring while Paused. `landmarks` is the
+    Hand's 21 normalised landmarks (None when no Hand is seen). The Camera-on
+    indicator appears when `camera_on`, and the FPS readout when `fps` is given.
+    `camera_image` is drawn behind everything only when `show_camera_image` is
+    True: the default Privacy preview ignores it.
+    """
+    if show_camera_image and camera_image is not None:
+        if (camera_image.width, camera_image.height) != (WIDTH, HEIGHT):
+            raise ValueError(f"camera image must be {WIDTH}x{HEIGHT}")
+        image = Image(WIDTH, HEIGHT, bytearray(camera_image.pixels))
+    else:
+        image = Image.blank(WIDTH, HEIGHT, BACKGROUND)
     if state is State.PAUSED:
         _draw_hold_ring(image, hold_progress)
         _draw_label(image, "PAUSED", TEXT_PAUSED)
     else:
         _draw_label(image, "ACTIVE", TEXT_ACTIVE)
+    if landmarks is not None:
+        _draw_skeleton(image, landmarks)
+    if camera_on:
+        _draw_camera_on(image)
+    if fps is not None:
+        _draw_fps(image, fps)
     return image
 
 
@@ -112,21 +196,83 @@ def _draw_hold_ring(image: Image, progress: float) -> None:
 
 
 def _draw_label(image: Image, text: str, colour: Colour) -> None:
-    advance = (GLYPH_WIDTH + GLYPH_GAP) * LABEL_SCALE
-    left = (image.width - (len(text) * advance - GLYPH_GAP * LABEL_SCALE)) // 2
+    left = (image.width - _text_width(text, LABEL_SCALE)) // 2
+    _draw_text(image, text, left, LABEL_TOP, LABEL_SCALE, colour)
+
+
+def _text_width(text: str, scale: int) -> int:
+    return (len(text) * (GLYPH_WIDTH + GLYPH_GAP) - GLYPH_GAP) * scale
+
+
+def _draw_text(image: Image, text: str, left: int, top: int, scale: int, colour: Colour) -> None:
+    advance = (GLYPH_WIDTH + GLYPH_GAP) * scale
     for index, letter in enumerate(text):
         for row, bits in enumerate(FONT[letter]):
             for column, bit in enumerate(bits):
                 if bit == "#":
                     _fill_block(
                         image,
-                        left + index * advance + column * LABEL_SCALE,
-                        LABEL_TOP + row * LABEL_SCALE,
+                        left + index * advance + column * scale,
+                        top + row * scale,
+                        scale,
                         colour,
                     )
 
 
-def _fill_block(image: Image, x: int, y: int, colour: Colour) -> None:
-    for dy in range(LABEL_SCALE):
-        for dx in range(LABEL_SCALE):
-            image.set(x + dx, y + dy, colour)
+def _fill_block(image: Image, x: int, y: int, size: int, colour: Colour) -> None:
+    for dy in range(size):
+        for dx in range(size):
+            _plot(image, x + dx, y + dy, colour)
+
+
+def _plot(image: Image, x: int, y: int, colour: Colour) -> None:
+    """Set a pixel, ignoring anything off the image (landmarks can leave the frame)."""
+    if 0 <= x < image.width and 0 <= y < image.height:
+        image.set(x, y, colour)
+
+
+def _fill_disc(image: Image, cx: int, cy: int, radius: int, colour: Colour) -> None:
+    for y in range(cy - radius, cy + radius + 1):
+        for x in range(cx - radius, cx + radius + 1):
+            if math.hypot(x - cx, y - cy) <= radius + 0.5:
+                _plot(image, x, y, colour)
+
+
+def _draw_line(
+    image: Image, start: tuple[int, int], end: tuple[int, int], radius: int, colour: Colour
+) -> None:
+    steps = max(abs(end[0] - start[0]), abs(end[1] - start[1]), 1)
+    for step in range(steps + 1):
+        x = round(start[0] + (end[0] - start[0]) * step / steps)
+        y = round(start[1] + (end[1] - start[1]) * step / steps)
+        _fill_disc(image, x, y, radius, colour)
+
+
+def _draw_skeleton(image: Image, landmarks: Landmarks) -> None:
+    """Bones first, then joints, with the Pointer on top. Coordinates are 0 to 1."""
+    if len(landmarks) != LANDMARK_COUNT:
+        return
+    points = [(round(x * (image.width - 1)), round(y * (image.height - 1))) for x, y in landmarks]
+    for first, second in HAND_CONNECTIONS:
+        _draw_line(image, points[first], points[second], BONE_RADIUS, BONE)
+    for index, (x, y) in enumerate(points):
+        if index != POINTER_INDEX:
+            _fill_disc(image, x, y, JOINT_RADIUS, JOINT)
+    x, y = points[POINTER_INDEX]
+    _fill_disc(image, x, y, POINTER_RADIUS, POINTER_COLOUR)
+
+
+def _draw_camera_on(image: Image) -> None:
+    """A red dot and "CAMERA ON", top left: the camera is capturing."""
+    dot_x = INDICATOR_MARGIN + CAMERA_DOT_RADIUS
+    dot_y = INDICATOR_MARGIN + (GLYPH_HEIGHT * INDICATOR_SCALE) // 2
+    _fill_disc(image, dot_x, dot_y, CAMERA_DOT_RADIUS, CAMERA_ON_DOT)
+    left = dot_x + CAMERA_DOT_RADIUS + INDICATOR_MARGIN // 2
+    _draw_text(image, "CAMERA ON", left, INDICATOR_MARGIN, INDICATOR_SCALE, STATUS_TEXT)
+
+
+def _draw_fps(image: Image, fps: float) -> None:
+    """The frame rate in whole frames per second, top right."""
+    text = f"{max(0, min(999, round(fps)))} FPS"
+    left = image.width - INDICATOR_MARGIN - _text_width(text, INDICATOR_SCALE)
+    _draw_text(image, text, left, INDICATOR_MARGIN, INDICATOR_SCALE, STATUS_TEXT)
