@@ -7,6 +7,9 @@ license = "MIT"
 license-files = ["LICENSE"]
 requires-python = ">=3.12"
 dependencies = [
+    # The Hand tracker (HandLandmarker, Tasks API). It also installs `cv2` (OpenCV) and numpy,
+    # which the camera adapter uses, so airmouse does not declare opencv-python.
+    "mediapipe>=1.2",
     # macOS only: the cursor output. Linux and CI import the pure logic without it.
     "pyobjc-framework-Quartz>=10; sys_platform == 'darwin'",
 ]

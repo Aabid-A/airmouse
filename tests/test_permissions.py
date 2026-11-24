@@ -5,6 +5,7 @@ import pytest
 
 from airmouse.cli import main
 from airmouse.permissions import _CAMERA_STATUS_SNIPPET, MacPermissionProbe, check_permissions
+from conftest import FakePreview
 
 
 @dataclass
@@ -24,8 +25,10 @@ class FakeProbe:
         return self.camera
 
 
-def test_all_granted_starts_without_noise(capsys: pytest.CaptureFixture[str]) -> None:
-    assert main([], probe=FakeProbe()) == 0
+def test_all_granted_starts_without_noise(
+    capsys: pytest.CaptureFixture[str], fake_preview: FakePreview
+) -> None:
+    assert main([], probe=FakeProbe(), preview=fake_preview) == 0
     assert capsys.readouterr().err == ""
 
 

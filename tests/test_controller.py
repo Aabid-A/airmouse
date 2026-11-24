@@ -12,6 +12,7 @@ from airmouse.renderer import (
     RING_INNER,
     render_preview,
 )
+from png import decode_png
 
 FRAME_S = 1 / 30
 SNAPSHOTS = Path(__file__).parent / "snapshots"
@@ -189,9 +190,9 @@ def test_losing_the_hand_also_clears_the_latch() -> None:
     [("paused", State.PAUSED, 0.0), ("charging", State.PAUSED, 0.6), ("active", State.ACTIVE, 0.0)],
 )
 def test_preview_snapshots(name: str, state: State, progress: float) -> None:
-    png = render_preview(state, progress).to_png()
+    expected = decode_png((SNAPSHOTS / f"{name}.png").read_bytes())
 
-    assert png == (SNAPSHOTS / f"{name}.png").read_bytes()
+    assert render_preview(state, progress).pixels == expected.pixels
 
 
 def test_the_hold_ring_fills_clockwise_from_the_top() -> None:
@@ -206,8 +207,7 @@ def test_the_hold_ring_fills_clockwise_from_the_top() -> None:
 
 
 def test_the_preview_is_only_background_ring_and_label() -> None:
-    colours = {
-        render_preview(State.PAUSED, 0.5).get(x, y) for x in range(0, 320, 3) for y in range(240)
-    }
+    image = render_preview(State.PAUSED, 0.5)
+    colours = {image.get(x, y) for x in range(0, 320, 3) for y in range(240)}
 
     assert len(colours) <= 4

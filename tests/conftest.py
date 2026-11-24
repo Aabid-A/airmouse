@@ -2,6 +2,8 @@ from typing import NoReturn
 
 import pytest
 
+from airmouse.config import Config
+
 
 class GrantedProbe:
     def accessibility_granted(self) -> bool:
@@ -22,3 +24,27 @@ def no_real_probe(monkeypatch: pytest.MonkeyPatch) -> None:
         pytest.fail("a test reached the real permission probe; pass a fake probe")
 
     monkeypatch.setattr("airmouse.cli.platform_probe_or_none", fail)
+
+
+@pytest.fixture(autouse=True)
+def no_live_preview(monkeypatch: pytest.MonkeyPatch) -> None:
+    def fail(*args: object, **kwargs: object) -> NoReturn:
+        pytest.fail("a test reached the real camera; pass a fake `preview` to main()")
+
+    monkeypatch.setattr("airmouse.cli.run_live_preview", fail)
+
+
+class FakePreview:
+    """Stands in for the live Preview: records what main() asked for."""
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[Config, bool]] = []
+
+    def __call__(self, config: Config, *, show_camera_image: bool) -> int:
+        self.calls.append((config, show_camera_image))
+        return 0
+
+
+@pytest.fixture
+def fake_preview() -> FakePreview:
+    return FakePreview()
