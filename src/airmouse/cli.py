@@ -20,7 +20,7 @@ from airmouse.permissions import PermissionProbe, check_permissions, platform_pr
 
 
 class PreviewRunner(Protocol):
-    def __call__(self, config: Config, *, show_camera_image: bool) -> int: ...
+    def __call__(self, config: Config, *, show_camera_image: bool, calibrate: bool) -> int: ...
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -61,6 +61,12 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="show the camera image in the Preview (default: only the skeleton on a plain "
         "background, so no face or room appears)",
+    )
+    parser.add_argument(
+        "--calibrate",
+        action="store_true",
+        help="show the Hand and the Active region to set rotate, mirror and the region "
+        "(no cursor input)",
     )
     return parser
 
@@ -105,4 +111,4 @@ def main(
             print(problem, file=sys.stderr)
             return 1
     run = preview or run_live_preview
-    return run(config, show_camera_image=args.show_camera_image)
+    return run(config, show_camera_image=args.show_camera_image, calibrate=args.calibrate)

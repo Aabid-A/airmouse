@@ -1,7 +1,7 @@
 import io
 import os
 from pathlib import Path
-from typing import Any
+from typing import Any, NoReturn
 
 import numpy as np
 import pytest
@@ -14,8 +14,9 @@ from airmouse.app import (
 )
 from airmouse.camera import CameraError
 from airmouse.config import CameraConfig, Config
+from airmouse.frame import active_region
 from airmouse.gestures import Landmarks
-from airmouse.renderer import PALETTE, WIDTH, Image
+from airmouse.renderer import PALETTE, REGION_OUTLINE, WIDTH, Image, render_calibrate
 from hands import open_hand
 
 FRAME_S = 1 / 30
@@ -44,10 +45,12 @@ class FakeTracker:
     def __init__(self, landmarks: Landmarks | None) -> None:
         self.landmarks = landmarks
         self.times: list[float] = []
+        self.shapes: list[tuple[int, ...]] = []
         self.closed = False
 
     def track(self, frame: Any, time_s: float) -> Landmarks | None:
         self.times.append(time_s)
+        self.shapes.append(frame.shape)
         return self.landmarks
 
     def close(self) -> None:
@@ -87,14 +90,17 @@ def run(
     tracker: FakeTracker | None = None,
     *,
     show_camera_image: bool = False,
+    calibrate: bool = False,
+    config: Config | None = None,
 ) -> tuple[int, str]:
     out = io.StringIO()
     status = run_preview(
-        Config(),
+        config or Config(),
         camera,
         tracker or FakeTracker(open_hand()),
         window,
         show_camera_image=show_camera_image,
+        calibrate=calibrate,
         clock=Clock(),
         out=out,
     )
@@ -219,3 +225,54 @@ def test_the_fps_meter_reads_the_frame_rate_and_smooths_it() -> None:
     second = meter.tick(0.15)  # a quick frame nudges, not jumps, the reading
     assert second is not None
     assert 10.0 < second < 20.0
+
+
+def test_frames_are_rotated_before_the_tracker_sees_them() -> None:
+    config = Config(camera=CameraConfig(rotate=90))
+    tracker = FakeTracker(open_hand())
+
+    run(FakeCamera(), FakeWindow(frames=1), tracker, config=config)
+
+    assert tracker.shapes == [(640, 480, 3)]
+
+
+def test_calibrate_shows_the_hand_and_the_active_region() -> None:
+    window = FakeWindow(frames=2)
+
+    status, output = run(FakeCamera(), window, calibrate=True)
+
+    assert status == 0
+    assert len(window.images) == 2
+    assert (
+        render_calibrate(
+            active_region(640, 480, 0.6), landmarks=open_hand(), camera_on=True, fps=None
+        ).pixels
+        == window.images[0].pixels
+    )
+    assert REGION_OUTLINE in {
+        window.images[1].get(x, y) for x in range(WIDTH) for y in range(window.images[1].height)
+    }
+    assert "calibrate mode: no cursor input" in output
+
+
+def test_calibrate_never_builds_a_controller(monkeypatch: pytest.MonkeyPatch) -> None:
+    def fail(*args: object, **kwargs: object) -> NoReturn:
+        pytest.fail("calibrate mode built a Controller, which is where cursor input comes from")
+
+    monkeypatch.setattr("airmouse.app.Controller", fail)
+
+    status, _ = run(FakeCamera(), FakeWindow(frames=2), calibrate=True)
+
+    assert status == 0
+
+
+def test_calibrate_follows_the_rotated_frame() -> None:
+    config = Config(camera=CameraConfig(rotate=270))
+    window = FakeWindow(frames=1)
+
+    run(FakeCamera(), window, calibrate=True, config=config)
+
+    expected = render_calibrate(
+        active_region(480, 640, 0.6), landmarks=open_hand(), camera_on=True, fps=None
+    )
+    assert window.images[0].pixels == expected.pixels

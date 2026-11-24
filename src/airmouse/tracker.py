@@ -10,7 +10,7 @@ from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import Any, Protocol
 
-from airmouse.camera import Frame
+from airmouse.frame import Frame
 from airmouse.gestures import Landmarks, hand_size
 
 HAND_MODEL_PATH = Path(__file__).parent / "assets" / "hand_landmarker.task"

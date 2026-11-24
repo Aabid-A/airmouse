@@ -2,7 +2,10 @@
 
 `run_preview` is the loop, written against small adapters (camera, tracker,
 window) so tests drive it with fakes. `run_live_preview` wires the real ones.
-There is no cursor output yet: the controller gets a no-op output.
+There is no cursor output yet: the controller gets a no-op output. In calibrate
+mode (`--calibrate`) the loop shows the Hand and the Active region instead and
+never builds a controller at all, so it can make no cursor input.
+Frames are rotated and mirrored by `prepare_frame` before tracking.
 """
 
 import sys
@@ -10,9 +13,11 @@ import time
 from collections.abc import Callable
 from typing import TextIO
 
+from airmouse.calibrate import render_calibration
 from airmouse.camera import Camera, CameraError, OpenCvCamera, frame_to_image
 from airmouse.config import CameraConfig, Config
 from airmouse.controller import Controller
+from airmouse.frame import prepare_frame
 from airmouse.renderer import render_preview
 from airmouse.tracker import HandLandmarkerTracker, Tracker, TrackerError
 from airmouse.window import OpenCvWindow, Window
@@ -60,20 +65,27 @@ def run_preview(
     window: Window,
     *,
     show_camera_image: bool = False,
+    calibrate: bool = False,
     clock: Callable[[], float] = time.monotonic,
     out: TextIO = sys.stdout,
 ) -> int:
     """Run until `q` or Ctrl-C, then release everything. Raises CameraError if frames stop."""
-    controller = Controller(config.timing, NoOutput())
+    controller = None if calibrate else Controller(config.timing, NoOutput())
     meter = FpsMeter()
     missed = 0
     print(camera_on_line(config.camera), file=out)
+    if calibrate:
+        print(
+            "calibrate mode: no cursor input. Adjust rotate and mirror until the "
+            "skeleton moves as your hand does.",
+            file=out,
+        )
     if show_camera_image:
         print("warning: the Preview shows the camera image (--show-camera-image).", file=out)
     try:
         while True:
-            frame = camera.read()
-            if frame is None:
+            raw = camera.read()
+            if raw is None:
                 missed += 1
                 if missed >= MAX_MISSED_FRAMES:
                     raise CameraError("the camera stopped delivering frames")
@@ -82,19 +94,30 @@ def run_preview(
                 continue
             missed = 0
             now = clock()
+            frame = prepare_frame(raw, config.camera.rotate, config.camera.mirror)
             landmarks = tracker.track(frame, now)
-            controller.update(now, landmarks)
-            window.show(
-                render_preview(
+            camera_image = frame_to_image(frame) if show_camera_image else None
+            if controller is None:
+                image = render_calibration(
+                    config,
+                    frame,
+                    landmarks,
+                    fps=meter.tick(now),
+                    camera_image=camera_image,
+                    show_camera_image=show_camera_image,
+                )
+            else:
+                controller.update(now, landmarks)
+                image = render_preview(
                     controller.state,
                     controller.hold_progress,
                     landmarks=landmarks,
                     camera_on=True,
                     fps=meter.tick(now),
-                    camera_image=frame_to_image(frame) if show_camera_image else None,
+                    camera_image=camera_image,
                     show_camera_image=show_camera_image,
                 )
-            )
+            window.show(image)
             if window.quit_requested():
                 break
     except KeyboardInterrupt:
@@ -107,7 +130,9 @@ def run_preview(
     return 0
 
 
-def run_live_preview(config: Config, *, show_camera_image: bool = False) -> int:
+def run_live_preview(
+    config: Config, *, show_camera_image: bool = False, calibrate: bool = False
+) -> int:
     """The real camera, Hand tracker and window. Returns the exit status."""
     try:
         tracker = HandLandmarkerTracker.open()
@@ -127,7 +152,14 @@ def run_live_preview(config: Config, *, show_camera_image: bool = False) -> int:
         tracker.close()
         raise
     try:
-        return run_preview(config, camera, tracker, window, show_camera_image=show_camera_image)
+        return run_preview(
+            config,
+            camera,
+            tracker,
+            window,
+            show_camera_image=show_camera_image,
+            calibrate=calibrate,
+        )
     except CameraError as error:
         print(f"airmouse: {error}", file=sys.stderr)
         return 1
