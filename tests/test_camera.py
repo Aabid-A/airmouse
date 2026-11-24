@@ -2,10 +2,8 @@ import importlib
 from typing import Any
 
 import numpy as np
-import pytest
 
 from airmouse.camera import OpenCvCamera, frame_to_image
-from airmouse.config import CameraConfig
 from airmouse.renderer import HEIGHT, WIDTH
 
 cv2: Any = importlib.import_module("cv2")
@@ -33,13 +31,13 @@ def bgr_frame() -> Any:
     return frame
 
 
-def camera(config: CameraConfig, frame: Any = None) -> tuple[OpenCvCamera, FakeCapture]:
+def camera(frame: Any = None) -> tuple[OpenCvCamera, FakeCapture]:
     capture = FakeCapture(frame)
-    return OpenCvCamera(capture, config, cv2), capture
+    return OpenCvCamera(capture, cv2), capture
 
 
 def test_frames_are_converted_from_bgr_to_rgb() -> None:
-    opened, _ = camera(CameraConfig(mirror=False), bgr_frame())
+    opened, _ = camera(bgr_frame())
 
     frame = opened.read()
     assert frame is not None
@@ -48,41 +46,23 @@ def test_frames_are_converted_from_bgr_to_rgb() -> None:
     assert frame.shape == (2, 3, 3)
 
 
-def test_mirror_flips_the_frame_left_to_right() -> None:
-    opened, _ = camera(CameraConfig(mirror=True), bgr_frame())
+def test_frames_come_out_unrotated_and_unmirrored() -> None:
+    opened, _ = camera(bgr_frame())
 
     frame = opened.read()
     assert frame is not None
 
-    assert tuple(frame[0, 2]) == (0, 0, 255)  # the blue pixel moved from column 0 to 2
-
-
-@pytest.mark.parametrize(("degrees", "shape"), [(0, (2, 3, 3)), (90, (3, 2, 3)), (180, (2, 3, 3))])
-def test_rotate_turns_the_frame(degrees: int, shape: tuple[int, int, int]) -> None:
-    opened, _ = camera(CameraConfig(rotate=degrees, mirror=False), bgr_frame())
-
-    frame = opened.read()
-    assert frame is not None
-    assert frame.shape == shape
-
-
-def test_rotating_90_degrees_turns_clockwise() -> None:
-    opened, _ = camera(CameraConfig(rotate=90, mirror=False), bgr_frame())
-
-    frame = opened.read()
-    assert frame is not None
-
-    assert tuple(frame[0, 1]) == (0, 0, 255)  # top-left blue moves to the top-right
+    assert tuple(frame[1, 2]) == (255, 0, 0)  # the red pixel is still at row 1, column 2
 
 
 def test_a_missed_read_gives_none() -> None:
-    opened, _ = camera(CameraConfig())
+    opened, _ = camera()
 
     assert opened.read() is None
 
 
 def test_release_releases_the_capture() -> None:
-    opened, capture = camera(CameraConfig())
+    opened, capture = camera()
 
     opened.release()
 

@@ -13,6 +13,7 @@ import zlib
 from dataclasses import dataclass
 
 from airmouse.controller import State
+from airmouse.frame import Region
 from airmouse.gestures import LANDMARK_COUNT, Landmarks
 
 WIDTH = 320
@@ -30,6 +31,8 @@ JOINT: Colour = (210, 225, 240)
 POINTER_COLOUR: Colour = (110, 230, 255)
 CAMERA_ON_DOT: Colour = (235, 70, 70)
 STATUS_TEXT: Colour = (150, 150, 150)
+REGION_OUTLINE: Colour = (240, 200, 90)
+TEXT_CALIBRATE: Colour = (240, 200, 90)
 
 # Every colour the Privacy preview can contain. A test uses it to prove no camera pixel gets in.
 PALETTE = frozenset(
@@ -44,6 +47,8 @@ PALETTE = frozenset(
         POINTER_COLOUR,
         CAMERA_ON_DOT,
         STATUS_TEXT,
+        REGION_OUTLINE,
+        TEXT_CALIBRATE,
     }
 )
 
@@ -60,6 +65,8 @@ POINTER_INDEX = 8  # the index fingertip
 BONE_RADIUS = 1
 JOINT_RADIUS = 3
 POINTER_RADIUS = 5
+
+REGION_OUTLINE_WIDTH = 2
 
 INDICATOR_SCALE = 2
 INDICATOR_MARGIN = 10
@@ -85,11 +92,13 @@ FONT: dict[str, tuple[str, ...]] = {
     "8": (".###.", "#...#", "#...#", ".###.", "#...#", "#...#", ".###."),
     "9": (".###.", "#...#", "#...#", ".####", "....#", "...#.", ".##.."),
     "A": (".###.", "#...#", "#...#", "#####", "#...#", "#...#", "#...#"),
+    "B": ("####.", "#...#", "#...#", "####.", "#...#", "#...#", "####."),
     "C": (".###.", "#...#", "#....", "#....", "#....", "#...#", ".###."),
     "D": ("####.", "#...#", "#...#", "#...#", "#...#", "#...#", "####."),
     "E": ("#####", "#....", "#....", "####.", "#....", "#....", "#####"),
     "F": ("#####", "#....", "#....", "####.", "#....", "#....", "#...."),
     "I": ("#####", "..#..", "..#..", "..#..", "..#..", "..#..", "#####"),
+    "L": ("#....", "#....", "#....", "#....", "#....", "#....", "#####"),
     "M": ("#...#", "##.##", "#.#.#", "#.#.#", "#...#", "#...#", "#...#"),
     "N": ("#...#", "##..#", "#.#.#", "#..##", "#...#", "#...#", "#...#"),
     "O": (".###.", "#...#", "#...#", "#...#", "#...#", "#...#", ".###."),
@@ -162,12 +171,7 @@ def render_preview(
     `camera_image` is drawn behind everything only when `show_camera_image` is
     True: the default Privacy preview ignores it.
     """
-    if show_camera_image and camera_image is not None:
-        if (camera_image.width, camera_image.height) != (WIDTH, HEIGHT):
-            raise ValueError(f"camera image must be {WIDTH}x{HEIGHT}")
-        image = Image(WIDTH, HEIGHT, bytearray(camera_image.pixels))
-    else:
-        image = Image.blank(WIDTH, HEIGHT, BACKGROUND)
+    image = _background(camera_image, show_camera_image)
     if state is State.PAUSED:
         _draw_hold_ring(image, hold_progress)
         _draw_label(image, "PAUSED", TEXT_PAUSED)
@@ -180,6 +184,55 @@ def render_preview(
     if fps is not None:
         _draw_fps(image, fps)
     return image
+
+
+def render_calibrate(
+    region: Region,
+    *,
+    landmarks: Landmarks | None = None,
+    camera_on: bool = False,
+    fps: float | None = None,
+    camera_image: Image | None = None,
+    show_camera_image: bool = False,
+) -> Image:
+    """Calibrate mode: the Hand and the outline of the Active `region` (normalised edges).
+
+    The Hand and the region are both in the prepared frame (rotated and mirrored),
+    so moving the hand right moves the skeleton right. It never shows a state:
+    calibrate mode makes no cursor input. Camera pixels follow the same opt-in as
+    `render_preview`.
+    """
+    image = _background(camera_image, show_camera_image)
+    _draw_region(image, region)
+    _draw_label(image, "CALIBRATE", TEXT_CALIBRATE)
+    if landmarks is not None:
+        _draw_skeleton(image, landmarks)
+    if camera_on:
+        _draw_camera_on(image)
+    if fps is not None:
+        _draw_fps(image, fps)
+    return image
+
+
+def _background(camera_image: Image | None, show_camera_image: bool) -> Image:
+    if show_camera_image and camera_image is not None:
+        if (camera_image.width, camera_image.height) != (WIDTH, HEIGHT):
+            raise ValueError(f"camera image must be {WIDTH}x{HEIGHT}")
+        return Image(WIDTH, HEIGHT, bytearray(camera_image.pixels))
+    return Image.blank(WIDTH, HEIGHT, BACKGROUND)
+
+
+def _draw_region(image: Image, region: Region) -> None:
+    left, top, right, bottom = region
+    x0, x1 = round(left * (image.width - 1)), round(right * (image.width - 1))
+    y0, y1 = round(top * (image.height - 1)), round(bottom * (image.height - 1))
+    for offset in range(REGION_OUTLINE_WIDTH):
+        for x in range(x0, x1 + 1):
+            _plot(image, x, y0 + offset, REGION_OUTLINE)
+            _plot(image, x, y1 - offset, REGION_OUTLINE)
+        for y in range(y0, y1 + 1):
+            _plot(image, x0 + offset, y, REGION_OUTLINE)
+            _plot(image, x1 - offset, y, REGION_OUTLINE)
 
 
 def _draw_hold_ring(image: Image, progress: float) -> None:
