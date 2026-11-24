@@ -84,6 +84,28 @@ class TimingConfig:
 
 
 @dataclass(frozen=True)
+class OpenPalmConfig:
+    """The Open palm check and the steadiness the Hold ring needs.
+
+    The score runs from 0 to 1 and the palm counts at `score_threshold` or more.
+    Each of the four fingers earns 0 when its tip is `finger_curled` hand sizes
+    from the wrist and 1 at `finger_extended` or more. The thumb and the spread
+    of the fingertips add a weak bonus (their weights), so fingers held close
+    together still count. A thumb tip closer than `pinch_gap` hand sizes to the
+    index tip is a Pinch, never an Open palm. `steady_max_speed` is how fast the
+    wrist may move, in hand sizes per second, for the Hold ring to keep filling.
+    """
+
+    score_threshold: float = _bounded(0.6, low=0.0, high=1.0)
+    finger_curled: float = _bounded(1.1, low=0.0, high=3.0)
+    finger_extended: float = _bounded(1.6, low=0.0, high=3.0)
+    thumb_weight: float = _bounded(0.1, low=0.0, high=0.5)
+    spread_weight: float = _bounded(0.05, low=0.0, high=0.5)
+    pinch_gap: float = _bounded(0.2, low=0.0, high=2.0)
+    steady_max_speed: float = _bounded(2.5, low=0.0, high=50.0)
+
+
+@dataclass(frozen=True)
 class Config:
     camera: CameraConfig = CameraConfig()
     active_region: ActiveRegionConfig = ActiveRegionConfig()
@@ -91,6 +113,7 @@ class Config:
     filter: FilterConfig = FilterConfig()
     pinch: PinchConfig = PinchConfig()
     timing: TimingConfig = TimingConfig()
+    open_palm: OpenPalmConfig = OpenPalmConfig()
 
 
 def _check_value(key: str, spec: dataclasses.Field[Any], value: Any) -> Any:
@@ -142,6 +165,11 @@ def _build(raw: Mapping[str, Any]) -> Config:
     config = Config(**built)
     if config.pinch.close_threshold >= config.pinch.open_threshold:
         raise ConfigError("pinch.close_threshold: must be below pinch.open_threshold")
+    palm = config.open_palm
+    if palm.finger_curled >= palm.finger_extended:
+        raise ConfigError("open_palm.finger_curled: must be below open_palm.finger_extended")
+    if palm.thumb_weight + palm.spread_weight >= 1:
+        raise ConfigError("open_palm.thumb_weight: with open_palm.spread_weight must total below 1")
     return config
 
 

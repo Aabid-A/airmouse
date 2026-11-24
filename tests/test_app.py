@@ -9,6 +9,7 @@ import pytest
 from airmouse.app import (
     MAX_MISSED_FRAMES,
     FpsMeter,
+    StageTimes,
     camera_on_line,
     run_preview,
 )
@@ -91,6 +92,7 @@ def run(
     *,
     show_camera_image: bool = False,
     calibrate: bool = False,
+    debug_gestures: bool = False,
     config: Config | None = None,
 ) -> tuple[int, str]:
     out = io.StringIO()
@@ -101,7 +103,9 @@ def run(
         window,
         show_camera_image=show_camera_image,
         calibrate=calibrate,
+        debug_gestures=debug_gestures,
         clock=Clock(),
+        timer=Clock(),
         out=out,
     )
     return status, out.getvalue()
@@ -318,3 +322,79 @@ def test_the_cursor_moves_only_once_the_open_palm_has_unpaused() -> None:
     )
 
     assert 0 < len(output.moves) < 90 - 40
+
+
+def test_the_default_preview_has_no_gesture_readout() -> None:
+    plain, flagged = FakeWindow(frames=5), FakeWindow(frames=5)
+
+    run(FakeCamera(), plain)
+    run(FakeCamera(), flagged, debug_gestures=False)
+
+    assert [image.pixels for image in plain.images] == [image.pixels for image in flagged.images]
+    # Nothing is drawn under the Camera-on indicator where the readout would start.
+    assert {plain.images[-1].get(x, 40) for x in range(6, 90)} == {(16, 16, 16)}
+
+
+def test_debug_gestures_draws_the_readout_on_every_frame() -> None:
+    plain, debug = FakeWindow(frames=6), FakeWindow(frames=6)
+
+    run(FakeCamera(), plain)
+    run(FakeCamera(), debug, debug_gestures=True)
+
+    for before, after in zip(plain.images, debug.images, strict=True):
+        assert before.pixels != after.pixels
+        assert {after.get(x, y) for x in range(0, WIDTH) for y in range(240)} <= PALETTE
+
+
+def test_the_readout_shows_the_open_palm_score_and_the_stage_timings() -> None:
+    window = FakeWindow(frames=8)
+
+    run(FakeCamera(), window, debug_gestures=True)
+
+    image = window.images[-1]
+    # The open hand counts: the score bar is green (the readout is not a mock-up).
+    assert any(image.get(x, 46) == (90, 200, 120) for x in range(6, 86))
+    # Five timing rows are drawn at the right.
+    rows = {y for y in range(34, 90) for x in range(236, 315) if image.get(x, y) == (150, 150, 150)}
+    assert len(rows) >= 5 * 5
+
+
+def test_the_readout_never_contains_camera_pixels_without_the_opt_in() -> None:
+    window = FakeWindow(frames=4)
+
+    run(FakeCamera(), window, debug_gestures=True)
+
+    for image in window.images:
+        assert {image.get(x, y) for x in range(0, WIDTH) for y in range(240)} <= PALETTE
+
+
+def test_calibrate_ignores_debug_gestures() -> None:
+    plain, debug = FakeWindow(frames=3), FakeWindow(frames=3)
+
+    run(FakeCamera(), plain, calibrate=True)
+    run(FakeCamera(), debug, calibrate=True, debug_gestures=True)
+
+    assert [image.pixels for image in plain.images] == [image.pixels for image in debug.images]
+
+
+def test_q_still_quits_and_releases_everything_with_the_readout_on() -> None:
+    camera, tracker, window = FakeCamera(), FakeTracker(open_hand()), FakeWindow(frames=2)
+
+    status, output = run(camera, window, tracker, debug_gestures=True)
+
+    assert status == 0
+    assert (camera.released, tracker.closed, window.closed) == (True, True, True)
+    assert output.splitlines()[-1] == "camera off"
+
+
+def test_stage_times_are_smoothed_and_keep_their_order() -> None:
+    stages = StageTimes()
+
+    stages.record("CAM", 0.030)
+    stages.record("TRACK", 0.010)
+    stages.record("CAM", 0.050)
+
+    (cam, cam_ms), (track, track_ms) = stages.readings()
+    assert (cam, track) == ("CAM", "TRACK")
+    assert track_ms == pytest.approx(10.0)
+    assert 30.0 < cam_ms < 40.0  # moves a tenth of the way to the new 50 ms

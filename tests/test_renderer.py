@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from airmouse.controller import State
+from airmouse.controller import PalmReading, State
 from airmouse.frame import active_region, prepare_point
 from airmouse.gestures import Landmarks, is_open_palm
 from airmouse.renderer import (
@@ -16,7 +16,10 @@ from airmouse.renderer import (
     POINTER_COLOUR,
     POINTER_INDEX,
     REGION_OUTLINE,
+    TEXT_ACTIVE,
+    TEXT_PAUSED,
     WIDTH,
+    DebugReadout,
     Image,
     render_calibrate,
     render_preview,
@@ -54,10 +57,52 @@ def calibrate_cases() -> dict[str, Image]:
     return cases
 
 
+TIMINGS = (("CAM", 31.2), ("PREP", 0.4), ("TRACK", 12.7), ("DRAW", 38.5), ("WIN", 4.1))
+
+
+def reading(score: float | None, speed: float | None, *, counts: bool, steady: bool) -> PalmReading:
+    return PalmReading(
+        score=score,
+        threshold=0.6,
+        speed=speed,
+        speed_limit=2.5,
+        counts=counts,
+        steady=steady,
+    )
+
+
+def debug_cases() -> dict[str, Image]:
+    """The `--debug-gestures` readout in three situations, from made-up numbers."""
+    return {
+        "debug_open": render_preview(
+            State.PAUSED,
+            0.6,
+            landmarks=placed(open_hand(), dy=-0.08),
+            camera_on=True,
+            fps=22.0,
+            debug=DebugReadout(reading(0.91, 0.8, counts=True, steady=True), TIMINGS),
+        ),
+        "debug_pointing": render_preview(
+            State.ACTIVE,
+            landmarks=placed(pointing_hand(), dy=-0.08),
+            camera_on=True,
+            fps=29.6,
+            debug=DebugReadout(reading(0.34, 3.4, counts=False, steady=False), TIMINGS),
+        ),
+        "debug_no_hand": render_preview(
+            State.PAUSED,
+            camera_on=True,
+            fps=30.0,
+            debug=DebugReadout(reading(None, None, counts=False, steady=True), TIMINGS),
+        ),
+    }
+
+
 def snapshot_cases() -> dict[str, Image]:
     """Each frame is built from synthetic landmarks only."""
     return {
         **calibrate_cases(),
+        **debug_cases(),
         "hand_paused": render_preview(
             State.PAUSED, 0.6, landmarks=placed(open_hand(), dy=-0.08), camera_on=True, fps=30.0
         ),
@@ -87,7 +132,9 @@ def top_right_corner(image: Image) -> bytes:
     return b"".join(rows)
 
 
-@pytest.mark.parametrize("name", ["hand_paused", "hand_active", "no_hand", *calibrate_cases()])
+@pytest.mark.parametrize(
+    "name", ["hand_paused", "hand_active", "no_hand", *calibrate_cases(), *debug_cases()]
+)
 def test_preview_snapshots_match_pixel_for_pixel(name: str) -> None:
     expected = decode_png((SNAPSHOTS / f"{name}.png").read_bytes())
     actual = snapshot_cases()[name]
@@ -255,3 +302,122 @@ def test_the_pointer_lands_where_the_prepared_frame_puts_it(rotate: int, mirror:
     image = render_calibrate(active_region(width, height, 0.6), landmarks=landmarks)
 
     assert image.get(*pixel_of(landmarks, POINTER_INDEX)) == POINTER_COLOUR
+
+
+def test_the_default_preview_is_unchanged_by_the_debug_option() -> None:
+    hand = placed(open_hand(), dy=-0.08)
+    plain = render_preview(State.PAUSED, 0.6, landmarks=hand, camera_on=True, fps=30.0)
+    explicit = render_preview(
+        State.PAUSED, 0.6, landmarks=hand, camera_on=True, fps=30.0, debug=None
+    )
+
+    assert plain.pixels == explicit.pixels
+
+
+def test_the_readout_only_adds_pixels_in_the_palette_and_never_camera_pixels() -> None:
+    for name, image in debug_cases().items():
+        assert colours_in(image) <= PALETTE, name
+    noisy = noisy_camera_image()
+    image = render_preview(
+        State.PAUSED,
+        camera_image=noisy,
+        debug=DebugReadout(reading(0.5, 1.0, counts=False, steady=True), TIMINGS),
+    )
+
+    assert colours_in(image) <= PALETTE
+
+
+def test_the_readout_can_show_camera_pixels_only_with_the_opt_in() -> None:
+    noisy = noisy_camera_image()
+    readout = DebugReadout(reading(0.5, 1.0, counts=False, steady=True), TIMINGS)
+
+    opted_in = render_preview(
+        State.PAUSED, camera_image=noisy, show_camera_image=True, debug=readout
+    )
+    default = render_preview(State.PAUSED, camera_image=noisy, debug=readout)
+
+    assert colours_in(opted_in) - PALETTE
+    assert not colours_in(default) - PALETTE
+
+
+BAR_LEFT, BAR_TOP = 6, 34 + 7 + 3  # the first bar: the palm score
+
+
+def filled_width(image: Image, bar_top: int, colour: tuple[int, int, int]) -> int:
+    return sum(image.get(x, bar_top + 2) == colour for x in range(BAR_LEFT, BAR_LEFT + 80))
+
+
+def test_the_score_bar_fills_in_proportion_and_goes_green_when_the_palm_counts() -> None:
+    low = render_preview(
+        State.PAUSED, debug=DebugReadout(reading(0.25, 0.0, counts=False, steady=True))
+    )
+    high = render_preview(
+        State.PAUSED, debug=DebugReadout(reading(1.0, 0.0, counts=True, steady=True))
+    )
+
+    assert filled_width(low, BAR_TOP, TEXT_PAUSED) == 20
+    assert filled_width(high, BAR_TOP, TEXT_ACTIVE) == 80 - 1  # the threshold tick covers a pixel
+
+
+def test_the_threshold_tick_sits_where_the_threshold_is() -> None:
+    image = render_preview(
+        State.PAUSED, debug=DebugReadout(reading(0.1, 0.0, counts=False, steady=True))
+    )
+
+    tick_x = BAR_LEFT + round(0.6 * 80)
+    assert image.get(tick_x, BAR_TOP + 2) == JOINT
+    assert image.get(tick_x, BAR_TOP - 2) == JOINT  # it reaches above the bar
+    assert image.get(tick_x + 4, BAR_TOP - 2) == BACKGROUND
+
+
+def test_the_speed_bar_is_full_at_twice_the_tolerance() -> None:
+    speed_top = BAR_TOP + 20
+    image = render_preview(
+        State.PAUSED, debug=DebugReadout(reading(0.1, 5.0, counts=False, steady=False))
+    )
+
+    assert filled_width(image, speed_top, TEXT_PAUSED) >= 80 - 2  # all but the tick
+
+
+def test_no_hand_leaves_the_bars_empty_and_says_so_without_inventing_numbers() -> None:
+    image = render_preview(
+        State.PAUSED, debug=DebugReadout(reading(None, None, counts=False, steady=True))
+    )
+
+    assert filled_width(image, BAR_TOP, TEXT_PAUSED) == 0
+    assert filled_width(image, BAR_TOP, TEXT_ACTIVE) == 0
+
+
+@pytest.mark.parametrize(
+    "palm",
+    [
+        reading(float("nan"), float("inf"), counts=False, steady=False),
+        reading(1e9, 1e9, counts=True, steady=False),
+        reading(-3.0, -3.0, counts=False, steady=True),
+    ],
+)
+def test_odd_numbers_never_break_the_readout(palm: PalmReading) -> None:
+    timings = (("CAM", float("nan")), ("TRACK", 1e12), ("WIN", -5.0))
+
+    image = render_preview(State.PAUSED, debug=DebugReadout(palm, timings))
+
+    assert colours_in(image) <= PALETTE
+
+
+def test_every_timing_row_is_drawn_on_the_right_below_the_fps() -> None:
+    plain = render_preview(State.ACTIVE, camera_on=True, fps=30.0)
+    debug = render_preview(
+        State.ACTIVE,
+        camera_on=True,
+        fps=30.0,
+        debug=DebugReadout(reading(None, None, counts=False, steady=True), TIMINGS),
+    )
+
+    def changed_rows(columns: range) -> list[int]:
+        return [
+            y for y in range(HEIGHT) if any(plain.get(x, y) != debug.get(x, y) for x in columns)
+        ]
+
+    rows = changed_rows(range(236, WIDTH - 5))
+    assert min(rows) >= 34  # below the FPS readout
+    assert len({y for y in rows if (y - 34) % 10 == 0}) == len(TIMINGS)
