@@ -29,10 +29,12 @@ not imply publishing.
    Write the title and body with the `pr` skill: a sketch of the change, the
    before/after evidence from `prove`, the criteria, and the merge danger.
 7. Run `/review-loop` for code or executable-workflow changes.
-8. Present the PR URL and the real review result.
+8. If the Merging rules in `AGENTS.md` allow it, merge (squash, pinned to the
+   reviewed head commit), confirm the issue closed, and remove the worktree.
+   Otherwise stop. Present the PR URL and the real review result.
 
 ## Never
 
-- Merge, unless the user explicitly asks.
+- Merge outside the `AGENTS.md` Merging rules, or use any override.
 - Push to `main` or use plain `--force`.
 - Report a review pass that didn't happen.

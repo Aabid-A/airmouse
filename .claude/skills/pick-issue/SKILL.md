@@ -13,7 +13,9 @@ Work comes from a GitHub issue. One agent, one issue.
    `gh issue list --label ready --state open`. Prefer the one that unblocks the
    most others. Say which you chose and why.
 2. **Read it fully:** `gh issue view <n> --comments`. Check:
-   - "Blocked by #x" items are all closed (`gh issue view <x>`).
+   - "Blocked by #x" items are all closed (`gh issue view <x>`), and every
+     "Builds on #x" issue has its PR merged to `main` (it may still be open if
+     it is human-verified).
    - Nobody else has it (label `in-progress` or an assignee). If taken, pick another.
    - The acceptance criteria are clear. If not, ask the user, or comment the
      question on the issue; don't guess.

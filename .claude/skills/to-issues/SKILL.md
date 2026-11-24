@@ -21,7 +21,10 @@ Turn a plan into issues an agent can pick up one at a time.
    - **Why:** one or two sentences.
    - **Acceptance criteria:** a checklist of observable results. Include the
      check or evidence that proves it (a test, a screenshot, a command output).
-   - **Blocked by:** other issues in this list, by title for now.
+   - **Blocked by:** other issues in this list, by title for now. A
+     human-verified issue stays open until the user closes it, so don't list it
+     here unless the user wants it as a gate. Put it under **Builds on**
+     instead: start once its PR is merged.
    - **Context** (lets `dispatch` route it and keeps workers from colliding):
      `Type:` feature, ui, bug, refactor or docs; `Files:` paths or folders
      likely to change (comma-separated; leave empty only if unknown, and it

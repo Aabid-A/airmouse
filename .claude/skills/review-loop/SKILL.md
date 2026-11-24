@@ -75,6 +75,11 @@ spec review as well; bots rarely know the spec.
 
 ## After it passes
 
+Post the result as a comment on the PR: the head commit, each axis (standards,
+spec) with pass or fail, and any "unproven" findings. A merge under the
+`AGENTS.md` Merging rules needs this comment on the current head. A new push
+makes it stale.
+
 If a finding was something a tool could have caught, say so in the PR and
 suggest a check (see the `retro` skill). That is how the brakes improve.
 

@@ -77,6 +77,8 @@ open PR with `needs-review`.
 - If a worker is stuck or widens scope, stop it, comment on the issue, and put
   the label back to `ready` or `blocked`.
 - When the batch is done, run `board.py` again: merged work may unblock more.
+- `board.py` reads only `Blocked by`. Before launching an issue, check each
+  `Builds on #n` PR is merged to `main`; hold the issue otherwise.
 
 ## 6. Report
 
@@ -85,7 +87,8 @@ Then suggest the next batch. Run `retro` if a worker went wrong.
 
 ## Never
 
-- Merge, or launch workers without the user's yes for that batch.
+- Launch workers without the user's yes for that batch, or merge outside the
+  `AGENTS.md` Merging rules.
 - Give two workers overlapping files.
 - Hand a worker the whole conversation; give it the packet.
 - Report a PR as done when checks or review haven't passed.
