@@ -27,12 +27,14 @@ ADR 0003).
 
 Apache License, Version 2.0 (full text in `LICENSE-Apache-2.0.txt`).
 
-Evidence, from Google's own model card ("Model Card Hand Tracking (Lite_Full)
-with Fairness Oct 2021", 358,044 bytes, SHA-256
+Evidence, from Google's own model card for the hand tracking models ("Model Card
+Hand Tracking (Lite_Full) with Fairness Oct 2021", 358,044 bytes, SHA-256
 `43127ff8a92e22717f0d8c30dab3efef4641a29cbf50b15ae3de001be94ab76b`,
 <https://storage.googleapis.com/mediapipe-assets/Model%20Card%20Hand%20Tracking%20(Lite_Full)%20with%20Fairness%20Oct%202021.pdf>):
-"LICENSED UNDER Apache License, Version 2.0". The Hugging Face model card also
-declares `license: apache-2.0`.
+"LICENSED UNDER Apache License, Version 2.0". This card covers the Lite and Full
+hand tracking model family and dates from October 2021; it does not name this exact
+bundle, which Google published in April 2023. The Hugging Face model card for this
+bundle also declares `license: apache-2.0`.
 
 ## Attribution
 
@@ -40,7 +42,7 @@ Created by the MediaPipe team at Google. Cite: F. Zhang, V. Bazarevsky, A. Vakun
 A. Tkachenka, G. Sung, C.-L. Chang, M. Grundmann, "MediaPipe Hands: On-device
 Real-time Hand Tracking", 2020, <https://arxiv.org/abs/2006.10214>. The model
 card also credits the GHUM hand model (Xu et al., CVPR 2020). No separate
-copyright notice or NOTICE file is published for the model.
+copyright notice or NOTICE file for the model was found as of 2026-11-24.
 
 ## Check it
 
