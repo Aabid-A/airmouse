@@ -24,7 +24,7 @@ labels: ready
 - Glossary terms:
 - ADRs:
 - Design references:
-<!-- e.g. sites/fastshot.md (prompt composer); style mode A or B -->
+<!-- e.g. a URL or screenshot to match, and the project's style -->
 - Part of spec: <!-- #n or none -->
 
 ## Blocked by

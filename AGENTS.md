@@ -107,9 +107,10 @@ all of these hold on that commit:
   dependency (`pyproject.toml` dependency lists, `uv.lock`). The user merges
   those.
 - The PR does not loosen lint, type or test rules: no new ignores or excludes
-  (in config, or inline as `# noqa`, `# type: ignore` or `# pyright: ignore`),
-  no lower thresholds, and no skipped, xfail or removed tests. The user merges
-  those.
+  (in config, including per-file ignores, or inline as `# noqa`, `# type: ignore`,
+  `# pyright: ignore` or `# pragma: no cover`), no removed lint rules or weaker
+  type-checking mode, no lower thresholds, and no skipped, deselected, xfail or
+  removed tests. The user merges those.
 - The PR's merge danger is a two-way door (a one-way door is a destructive
   action; see below).
 
