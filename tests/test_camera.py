@@ -1,9 +1,12 @@
 import importlib
+import sys
 from typing import Any
 
 import numpy as np
+import pytest
 
-from airmouse.camera import OpenCvCamera, frame_to_image
+from airmouse.camera import CameraError, OpenCvCamera, frame_to_image
+from airmouse.config import CameraConfig
 from airmouse.renderer import HEIGHT, WIDTH
 
 cv2: Any = importlib.import_module("cv2")
@@ -76,3 +79,69 @@ def test_a_frame_becomes_a_preview_sized_image() -> None:
 
     assert (image.width, image.height) == (WIDTH, HEIGHT)
     assert image.get(10, 10) == (200, 200, 200)
+
+
+class FakeVideoCapture(FakeCapture):
+    """Records how cv2.VideoCapture was built and which properties were set."""
+
+    def __init__(self, index: int, backend: int, opened: bool) -> None:
+        super().__init__()
+        self.index = index
+        self.backend = backend
+        self.opened = opened
+        self.props: dict[int, float] = {}
+
+    def isOpened(self) -> bool:
+        return self.opened
+
+    def set(self, prop: int, value: float) -> bool:
+        self.props[prop] = value
+        return True
+
+
+class FakeCv2:
+    """A stand-in for the cv2 module: distinct constants and a recording VideoCapture."""
+
+    CAP_ANY = 0
+    CAP_AVFOUNDATION = 1200
+    CAP_PROP_FRAME_WIDTH = 3
+    CAP_PROP_FRAME_HEIGHT = 4
+    CAP_PROP_FPS = 5
+
+    def __init__(self, opened: bool = True) -> None:
+        self.opened = opened
+        self.captures: list[FakeVideoCapture] = []
+
+    def VideoCapture(self, index: int, backend: int) -> FakeVideoCapture:
+        capture = FakeVideoCapture(index, backend, self.opened)
+        self.captures.append(capture)
+        return capture
+
+
+def test_open_passes_the_camera_settings_to_cv2(monkeypatch: pytest.MonkeyPatch) -> None:
+    fake = FakeCv2()
+    monkeypatch.setitem(sys.modules, "cv2", fake)
+
+    OpenCvCamera.open(CameraConfig(index=2, width=1280, height=720, fps=60))
+
+    (capture,) = fake.captures
+    assert capture.index == 2
+    assert capture.props == {
+        FakeCv2.CAP_PROP_FRAME_WIDTH: 1280,
+        FakeCv2.CAP_PROP_FRAME_HEIGHT: 720,
+        FakeCv2.CAP_PROP_FPS: 60,
+    }
+
+
+def test_a_camera_that_does_not_open_raises_a_clear_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake = FakeCv2(opened=False)
+    monkeypatch.setitem(sys.modules, "cv2", fake)
+
+    with pytest.raises(CameraError, match=r"camera 3 did not open.*--camera N"):
+        OpenCvCamera.open(CameraConfig(index=3))
+
+    (capture,) = fake.captures
+    assert capture.released
+    assert capture.props == {}
