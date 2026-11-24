@@ -80,6 +80,8 @@ When a task went badly, or every few PRs, run `/retro` to improve the setup.
 - Git hooks (`.githooks/`) and, in Claude Code, a guardrail hook block commits
   on `main`, pushes to `main`, plain force-push, `reset --hard` and `clean -f`.
   Don't work around them; if one blocks you, stop and say why you needed it.
+- Never use an override: `SKIP_CHECKS`, `ALLOW_MAIN`, `--no-verify`, plain
+  force-push. If the check is wrong, fix the check.
 - Review runs on two axes (standards and spec) in `/review-loop`.
 
 ## Merging
@@ -96,7 +98,8 @@ all of these hold on that commit:
 - The PR links no `human-verified` issue, whether by `Closes` or `Refs`. For
   those the user merges, and closes the issue after trying it.
 - The PR does not change the rules or brakes: `AGENTS.md`, `CLAUDE.md`,
-  `.claude/`, `.githooks/`, `.github/`, `CODING_STANDARDS.md`, `scripts/`, or the
+  `.claude/`, `.agents/`, `.cursor/`, `.githooks/`, `.github/`,
+  `CODING_STANDARDS.md`, `scripts/`, or the
   dependencies and the build, lint, type and test settings in `pyproject.toml`
   and `uv.lock`. The user merges those.
 - The PR's merge danger is a two-way door (a one-way door is a destructive
