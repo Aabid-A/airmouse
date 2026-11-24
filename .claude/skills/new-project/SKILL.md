@@ -29,7 +29,8 @@ Start a project the factory can run on.
    `CODING_STANDARDS.md`, `scripts/check.sh` and the git hooks.
 3. **Write a short `README.md`** (one-line description, stack, how to run) and
    a `.gitignore` for the stack. This first scaffold is the only commit on
-   `main`; the hooks block it, so use the one-off override and tell the user:
+   `main`; the hooks block it. Agents never use overrides, so stop and give the
+   user these one-off commands to run themselves:
    `ALLOW_MAIN=1 git commit ...` and `ALLOW_MAIN=1 SKIP_CHECKS=1 git push`.
    Every later change goes through a branch and PR.
 4. **Create labels:** `spec`, `ready`, `in-progress`, `needs-review`, `blocked`,
@@ -38,7 +39,8 @@ Start a project the factory can run on.
    the list. Defaults, in order:
    - Fill in `scripts/check.sh` (install, lint, typecheck, test) and remove its
      guard; add the runtime to `.github/workflows/checks.yml`. Until this
-     lands, push with `SKIP_CHECKS=1` and expect CI to fail.
+     lands the pre-push hook blocks pushes and CI fails: make this the first
+     issue, and let the user push with `SKIP_CHECKS=1` if they choose.
    - Choose the stack, record it as the first ADR, and write `skills/code-structure`.
    - Start `GLOSSARY.md` with the core domain terms (`domain-docs`).
    - Once the app runs: `create-verification-skill` to script launching and
