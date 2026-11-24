@@ -20,7 +20,9 @@ from airmouse.permissions import PermissionProbe, check_permissions, platform_pr
 
 
 class PreviewRunner(Protocol):
-    def __call__(self, config: Config, *, show_camera_image: bool, calibrate: bool) -> int: ...
+    def __call__(
+        self, config: Config, *, show_camera_image: bool, calibrate: bool, debug_gestures: bool
+    ) -> int: ...
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -68,6 +70,13 @@ def build_parser() -> argparse.ArgumentParser:
         help="show the Hand and the Active region to set rotate, mirror and the region "
         "(no cursor input)",
     )
+    parser.add_argument(
+        "--debug-gestures",
+        action="store_true",
+        help="draw the Open palm score, the wrist speed against the Hold ring's steadiness "
+        "tolerance and per-stage timings in the Preview, to tune the open_palm config "
+        "(no camera pixels; ignored with --calibrate)",
+    )
     return parser
 
 
@@ -111,4 +120,9 @@ def main(
             print(problem, file=sys.stderr)
             return 1
     run = preview or run_live_preview
-    return run(config, show_camera_image=args.show_camera_image, calibrate=args.calibrate)
+    return run(
+        config,
+        show_camera_image=args.show_camera_image,
+        calibrate=args.calibrate,
+        debug_gestures=args.debug_gestures,
+    )

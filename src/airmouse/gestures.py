@@ -7,6 +7,8 @@ the fingertips and 5/9/13/17 the finger base (MCP) joints.
 import math
 from collections.abc import Sequence
 
+from airmouse.config import OpenPalmConfig
+
 type Point = tuple[float, float]
 type Landmarks = Sequence[Point]
 
@@ -15,14 +17,16 @@ WRIST = 0
 THUMB_TIP = 4
 POINTER = 8  # the index fingertip; its position drives the cursor
 INDEX_MCP = 5
+INDEX_TIP = 8
 MIDDLE_MCP = 9
 FINGER_TIPS = (8, 12, 16, 20)
 
 # All distances are in hand sizes (wrist to the middle finger's base), so the
 # Open palm reads the same near or far from the camera.
-FINGER_EXTENDED = 1.5  # a fingertip this far from the wrist counts as extended
-THUMB_OUT = 0.7  # thumb tip this far from the index finger's base counts as out
-FINGER_SPREAD = 0.25  # neighbouring fingertips at least this far apart
+THUMB_OUT = 0.7  # a thumb tip this far from the index finger's base is fully out
+FINGER_SPREAD = 0.25  # neighbouring fingertips this far apart are fully spread
+
+DEFAULT_OPEN_PALM = OpenPalmConfig()
 
 
 def distance(a: Point, b: Point) -> float:
@@ -34,17 +38,43 @@ def hand_size(landmarks: Landmarks) -> float:
     return distance(landmarks[WRIST], landmarks[MIDDLE_MCP])
 
 
-def is_open_palm(landmarks: Landmarks) -> bool:
-    """All five fingers extended and spread."""
+def _ramp(value: float, low: float, high: float) -> float:
+    """0 at `low` or less, 1 at `high` or more, a straight line between."""
+    return max(0.0, min(1.0, (value - low) / (high - low)))
+
+
+def open_palm_score(landmarks: Landmarks, config: OpenPalmConfig = DEFAULT_OPEN_PALM) -> float:
+    """How much the Hand looks like an Open palm, from 0 to 1.
+
+    Mostly how far each of the four fingers reaches from the wrist, so upright
+    fingers held together score well and a fist or a Pointer pose (one finger out,
+    three curled) does not. A thumb that is out and fingertips that are spread add
+    a little. A thumb tip touching the index tip (a Pinch) scores 0.
+    """
     if len(landmarks) != LANDMARK_COUNT:
-        return False
+        return 0.0
     size = hand_size(landmarks)
     if size <= 0:
-        return False
+        return 0.0
+    if distance(landmarks[THUMB_TIP], landmarks[INDEX_TIP]) < config.pinch_gap * size:
+        return 0.0
     wrist = landmarks[WRIST]
-    if any(distance(wrist, landmarks[tip]) < FINGER_EXTENDED * size for tip in FINGER_TIPS):
-        return False
-    if distance(landmarks[THUMB_TIP], landmarks[INDEX_MCP]) < THUMB_OUT * size:
-        return False
+    reach = [
+        _ramp(distance(wrist, landmarks[tip]) / size, config.finger_curled, config.finger_extended)
+        for tip in FINGER_TIPS
+    ]
+    thumb = _ramp(distance(landmarks[THUMB_TIP], landmarks[INDEX_MCP]) / size, 0.0, THUMB_OUT)
     tips = [landmarks[tip] for tip in FINGER_TIPS]
-    return all(distance(a, b) >= FINGER_SPREAD * size for a, b in zip(tips, tips[1:], strict=False))
+    gaps = [distance(a, b) / size for a, b in zip(tips, tips[1:], strict=False)]
+    spread = _ramp(sum(gaps) / len(gaps), 0.0, FINGER_SPREAD)
+    reach_weight = 1 - config.thumb_weight - config.spread_weight
+    return (
+        reach_weight * sum(reach) / len(reach)
+        + config.thumb_weight * thumb
+        + config.spread_weight * spread
+    )
+
+
+def is_open_palm(landmarks: Landmarks, config: OpenPalmConfig = DEFAULT_OPEN_PALM) -> bool:
+    """The Open palm score reaches its threshold."""
+    return open_palm_score(landmarks, config) >= config.score_threshold

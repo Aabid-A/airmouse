@@ -71,6 +71,8 @@ def test_720p_is_a_config_option(tmp_path: Path) -> None:
         ("active_region", "width_fraction", "nan"),
         ("timing", "unpause_hold_s", "inf"),
         ("filter", "beta", "-inf"),
+        ("open_palm", "score_threshold", "nan"),
+        ("open_palm", "steady_max_speed", "inf"),
     ],
 )
 def test_non_finite_numbers_are_rejected(
@@ -125,6 +127,13 @@ def test_print_config_lists_every_effective_value(
         "unpause_hold_s = 0.8",
         "pause_debounce_ms = 150.0",
         "no_hand_timeout_ms = 250.0",
+        "score_threshold = 0.6",
+        "finger_curled = 1.1",
+        "finger_extended = 1.6",
+        "thumb_weight = 0.1",
+        "spread_weight = 0.05",
+        "pinch_gap = 0.2",
+        "steady_max_speed = 2.5",
     ]:
         assert expected in out
 
@@ -148,6 +157,17 @@ def test_printed_config_loads_back_unchanged(tmp_path: Path) -> None:
         ('[control]\nmode = "relative"\n', "control.mode"),
         ("[pinch]\nclose_threshold = 0.5\nopen_threshold = 0.4\n", "pinch.close_threshold"),
         ("[timing]\nunpause_hold_s = -1\n", "timing.unpause_hold_s"),
+        ("[open_palm]\nscore_threshold = 1.5\n", "open_palm.score_threshold"),
+        ("[open_palm]\nsteady_max_speed = -1\n", "open_palm.steady_max_speed"),
+        ("[open_palm]\nsteady_max_speed = 99\n", "open_palm.steady_max_speed"),
+        ('[open_palm]\nscore_threshold = "high"\n', "open_palm.score_threshold"),
+        ("[open_palm]\nthumb_weight = 0.9\n", "open_palm.thumb_weight"),
+        ("[open_palm]\nfinger_curled = 2.0\nfinger_extended = 1.5\n", "open_palm.finger_curled"),
+        (
+            "[open_palm]\nthumb_weight = 0.5\nspread_weight = 0.5\n",
+            "open_palm.thumb_weight",
+        ),
+        ("[open_palm]\nspred_weight = 0.1\n", "open_palm.spred_weight"),
     ],
 )
 def test_invalid_file_names_the_key(tmp_path: Path, toml: str, key: str) -> None:
@@ -182,3 +202,34 @@ def test_cli_exits_non_zero_and_names_the_key(
 
     assert exit_info.value.code != 0
     assert "camera.indx" in capsys.readouterr().err
+
+
+def test_open_palm_defaults_are_looser_than_the_values_tuned_on_synthetic_frames() -> None:
+    palm = load_config().open_palm
+
+    assert palm.steady_max_speed > 1.0  # the old fixed tolerance, in hand sizes per second
+    assert palm.thumb_weight + palm.spread_weight <= 0.2  # thumb and spread are weak terms
+    assert palm.finger_extended <= 1.6  # the old rule wanted every fingertip 1.5 hand sizes out
+    assert 0.0 < palm.score_threshold < 1.0
+
+
+def test_open_palm_values_come_from_the_file(tmp_path: Path) -> None:
+    path = write(
+        tmp_path,
+        "[open_palm]\nscore_threshold = 0.7\nsteady_max_speed = 4\npinch_gap = 0.3\n",
+    )
+
+    palm = load_config(path).open_palm
+
+    assert palm.score_threshold == 0.7
+    assert palm.steady_max_speed == 4.0
+    assert palm.pinch_gap == 0.3
+    assert palm.finger_curled == Config().open_palm.finger_curled
+
+
+def test_open_palm_values_can_be_overridden_after_the_file(tmp_path: Path) -> None:
+    path = write(tmp_path, "[open_palm]\nscore_threshold = 0.7\n")
+
+    config = load_config(path, {"open_palm": {"score_threshold": 0.8}})
+
+    assert config.open_palm.score_threshold == 0.8

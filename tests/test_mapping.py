@@ -7,6 +7,7 @@ from airmouse.controller import Controller, State
 from airmouse.frame import prepare_point
 from airmouse.gestures import POINTER, Landmarks, Point
 from airmouse.mapping import make_cursor_path, make_mapping
+from anatomy import synthetic_hand
 from hands import open_hand, pointing_hand
 
 FRAME_S = 1 / 30
@@ -224,3 +225,37 @@ def test_an_unknown_control_mode_is_an_error_listing_the_valid_ones() -> None:
 
     with pytest.raises(ConfigError, match="relative.*absolute"):
         make_mapping(config, DISPLAY)
+
+
+def test_a_close_fingered_open_hand_never_moves_the_cursor() -> None:
+    rig = Rig()
+    rig.feed(FRAME_S, pointer_at(0.5, 0.5))  # the Hand leaves the pose that unpaused
+    rig.output.moves.clear()
+
+    for frame in range(30):
+        rig.frame(synthetic_hand("open together", jitter=0.003, seed=frame))
+
+    assert rig.controller.state is State.PAUSED
+    assert rig.output.moves == []
+
+
+def test_a_close_fingered_open_hand_unpauses_without_moving_the_cursor() -> None:
+    rig = Rig(active=False)
+
+    for frame in range(45):
+        rig.frame(synthetic_hand("open together", jitter=0.003, seed=frame))
+
+    assert rig.controller.state is State.ACTIVE
+    assert rig.output.moves == []
+
+
+def test_a_real_pointing_hand_moves_the_cursor_and_is_not_an_open_palm() -> None:
+    rig = Rig()
+    rig.feed(FRAME_S, None)
+
+    for frame in range(30):
+        rig.frame(synthetic_hand("pointing relaxed", jitter=0.003, seed=frame))
+
+    assert rig.controller.state is State.ACTIVE
+    assert len(rig.output.moves) == 30
+    assert all(0 <= x <= MAX_X and 0 <= y <= MAX_Y for x, y in rig.output.moves)

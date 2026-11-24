@@ -3,7 +3,8 @@
 The Preview is drawn on a plain near-black background and never contains camera
 pixels (ADR 0001) unless the caller passes a camera image AND explicitly opts in
 with `show_camera_image=True`. It shows the Hand skeleton, the Camera-on
-indicator, an FPS readout, a state label and the Hold ring.
+indicator, an FPS readout, a state label and the Hold ring. With `--debug-gestures`
+it also draws the gesture readout (bars and numbers, never camera pixels).
 The only dependency is the standard library, so PNGs are written by hand.
 """
 
@@ -12,7 +13,7 @@ import struct
 import zlib
 from dataclasses import dataclass
 
-from airmouse.controller import State
+from airmouse.controller import PalmReading, State
 from airmouse.frame import Region
 from airmouse.gestures import LANDMARK_COUNT, Landmarks
 
@@ -109,9 +110,39 @@ FONT: dict[str, tuple[str, ...]] = {
     "U": ("#...#", "#...#", "#...#", "#...#", "#...#", "#...#", ".###."),
     "V": ("#...#", "#...#", "#...#", "#...#", "#...#", ".#.#.", "..#.."),
 }
+FONT.update(
+    {
+        "K": ("#...#", "#..#.", "#.#..", "##...", "#.#..", "#..#.", "#...#"),
+        "W": ("#...#", "#...#", "#...#", "#.#.#", "#.#.#", "##.##", "#...#"),
+        "Y": ("#...#", "#...#", ".#.#.", "..#..", "..#..", "..#..", "..#.."),
+        ".": (".....", ".....", ".....", ".....", ".....", "..##.", "..##."),
+        "/": ("....#", "....#", "...#.", "..#..", ".#...", "#....", "#...."),
+        "-": (".....", ".....", ".....", "#####", ".....", ".....", "....."),
+    }
+)
 GLYPH_WIDTH = 5
 GLYPH_HEIGHT = 7
 GLYPH_GAP = 1
+
+# The gesture readout (`--debug-gestures`): two bars on the left, status lines under
+# them, and the per-stage timings in ms on the right. All in existing palette colours.
+DEBUG_LEFT = 6
+DEBUG_TOP = 34
+DEBUG_ROW = 20
+DEBUG_BAR_WIDTH = 80
+DEBUG_BAR_HEIGHT = 6
+DEBUG_TICK_OVERHANG = 2
+DEBUG_LINE = 10
+DEBUG_SPEED_RANGE = 2.0  # the speed bar is full at this many times its limit
+DEBUG_NUMBER_CAP = 99.9
+
+
+@dataclass(frozen=True)
+class DebugReadout:
+    """What `--debug-gestures` draws: the palm reading and per-stage timings (name, ms)."""
+
+    palm: PalmReading
+    timings: tuple[tuple[str, float], ...] = ()
 
 
 @dataclass
@@ -162,6 +193,7 @@ def render_preview(
     fps: float | None = None,
     camera_image: Image | None = None,
     show_camera_image: bool = False,
+    debug: DebugReadout | None = None,
 ) -> Image:
     """The Preview for a state.
 
@@ -169,7 +201,7 @@ def render_preview(
     Hand's 21 normalised landmarks (None when no Hand is seen). The Camera-on
     indicator appears when `camera_on`, and the FPS readout when `fps` is given.
     `camera_image` is drawn behind everything only when `show_camera_image` is
-    True: the default Privacy preview ignores it.
+    True: the default Privacy preview ignores it. `debug` adds the gesture readout.
     """
     image = _background(camera_image, show_camera_image)
     if state is State.PAUSED:
@@ -183,6 +215,8 @@ def render_preview(
         _draw_camera_on(image)
     if fps is not None:
         _draw_fps(image, fps)
+    if debug is not None:
+        _draw_debug(image, debug)
     return image
 
 
@@ -329,3 +363,74 @@ def _draw_fps(image: Image, fps: float) -> None:
     text = f"{max(0, min(999, round(fps)))} FPS"
     left = image.width - INDICATOR_MARGIN - _text_width(text, INDICATOR_SCALE)
     _draw_text(image, text, left, INDICATOR_MARGIN, INDICATOR_SCALE, STATUS_TEXT)
+
+
+def _number(value: float | None, cap: float = DEBUG_NUMBER_CAP, places: int = 1) -> str:
+    """A short fixed-point number, or `--` when there is none."""
+    if value is None or not math.isfinite(value):
+        return "--"
+    return f"{max(0.0, min(cap, value)):.{places}f}"
+
+
+def _draw_debug(image: Image, readout: DebugReadout) -> None:
+    palm = readout.palm
+    _draw_meter(
+        image,
+        0,
+        f"PALM {_number(palm.score, places=2)}/{_number(palm.threshold, places=2)}",
+        fraction=palm.score,
+        mark=palm.threshold,
+        full=1.0,
+        good=palm.counts,
+    )
+    _draw_meter(
+        image,
+        1,
+        f"SPEED {_number(palm.speed)}/{_number(palm.speed_limit)}",
+        fraction=palm.speed,
+        mark=palm.speed_limit,
+        full=palm.speed_limit * DEBUG_SPEED_RANGE,
+        good=palm.steady,
+    )
+    top = DEBUG_TOP + 2 * DEBUG_ROW
+    for line, (label, good) in enumerate((("COUNTS", palm.counts), ("STEADY", palm.steady))):
+        text = f"{label} {'YES' if good else 'NO'}"
+        _draw_text(
+            image,
+            text,
+            DEBUG_LEFT,
+            top + line * DEBUG_LINE,
+            1,
+            TEXT_ACTIVE if good else TEXT_PAUSED,
+        )
+    for line, (name, milliseconds) in enumerate(readout.timings):
+        text = f"{name} {_number(milliseconds)}"
+        left = image.width - DEBUG_LEFT - _text_width(text, 1)
+        _draw_text(image, text, left, DEBUG_TOP + line * DEBUG_LINE, 1, STATUS_TEXT)
+
+
+def _draw_meter(
+    image: Image,
+    row: int,
+    text: str,
+    *,
+    fraction: float | None,
+    mark: float,
+    full: float,
+    good: bool,
+) -> None:
+    """A line of text over a bar filled to `fraction` of `full`, with a tick at `mark`."""
+    top = DEBUG_TOP + row * DEBUG_ROW
+    _draw_text(image, text, DEBUG_LEFT, top, 1, STATUS_TEXT)
+    bar_top = top + GLYPH_HEIGHT + 3
+    for y in range(bar_top, bar_top + DEBUG_BAR_HEIGHT):
+        for x in range(DEBUG_LEFT, DEBUG_LEFT + DEBUG_BAR_WIDTH):
+            _plot(image, x, y, RING_TRACK)
+    if fraction is not None and math.isfinite(fraction):
+        filled = round(max(0.0, min(1.0, fraction / full)) * DEBUG_BAR_WIDTH)
+        for y in range(bar_top, bar_top + DEBUG_BAR_HEIGHT):
+            for x in range(DEBUG_LEFT, DEBUG_LEFT + filled):
+                _plot(image, x, y, TEXT_ACTIVE if good else RING_FILLED)
+    tick = DEBUG_LEFT + min(DEBUG_BAR_WIDTH - 1, round(max(0.0, mark / full) * DEBUG_BAR_WIDTH))
+    for y in range(bar_top - DEBUG_TICK_OVERHANG, bar_top + DEBUG_BAR_HEIGHT + DEBUG_TICK_OVERHANG):
+        _plot(image, tick, y, JOINT)

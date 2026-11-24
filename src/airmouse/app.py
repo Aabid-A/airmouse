@@ -5,7 +5,8 @@ window) so tests drive it with fakes. `run_live_preview` wires the real ones.
 The controller gets the real Quartz cursor output on macOS and a no-op output
 elsewhere (and in tests). In calibrate mode (`--calibrate`) the loop shows the
 Hand and the Active region instead and never builds a controller at all, so it
-can make no cursor input.
+can make no cursor input. With `--debug-gestures` the Preview also draws the Open
+palm score, the wrist speed and per-stage timings (see `StageTimes`).
 Frames are rotated and mirrored by `prepare_frame` before tracking.
 """
 
@@ -21,12 +22,13 @@ from airmouse.controller import Controller, Output
 from airmouse.frame import prepare_frame
 from airmouse.mapping import make_cursor_path
 from airmouse.output import OutputError, QuartzOutput
-from airmouse.renderer import render_preview
+from airmouse.renderer import DebugReadout, render_preview
 from airmouse.tracker import HandLandmarkerTracker, Tracker, TrackerError
 from airmouse.window import OpenCvWindow, Window
 
 MAX_MISSED_FRAMES = 100  # this many empty reads in a row means the camera has gone
 FPS_SMOOTHING = 0.1  # weight of the newest frame in the FPS readout
+TIMING_SMOOTHING = 0.1  # weight of the newest frame in each stage timing
 
 
 # The display size the mapping assumes when there is no real output (a 16:10 laptop screen).
@@ -61,6 +63,27 @@ class FpsMeter:
         return self._fps
 
 
+class StageTimes:
+    """Smoothed milliseconds each stage of the loop takes, in the order first recorded.
+
+    CAM is the wait for the camera's next frame, so it is long whenever the camera
+    delivers slowly. The other stages are real work.
+    """
+
+    def __init__(self) -> None:
+        self._ms: dict[str, float] = {}
+
+    def record(self, name: str, seconds: float) -> None:
+        milliseconds = seconds * 1000
+        old = self._ms.get(name)
+        self._ms[name] = (
+            milliseconds if old is None else old + TIMING_SMOOTHING * (milliseconds - old)
+        )
+
+    def readings(self) -> tuple[tuple[str, float], ...]:
+        return tuple(self._ms.items())
+
+
 def camera_on_line(camera: CameraConfig) -> str:
     return (
         f"camera on: camera {camera.index}, {camera.width}x{camera.height} at {camera.fps} fps. "
@@ -76,21 +99,30 @@ def run_preview(
     *,
     show_camera_image: bool = False,
     calibrate: bool = False,
+    debug_gestures: bool = False,
     output: Output | None = None,
     display: tuple[float, float] = DEFAULT_DISPLAY,
     clock: Callable[[], float] = time.monotonic,
+    timer: Callable[[], float] = time.perf_counter,
     out: TextIO = sys.stdout,
 ) -> int:
     """Run until `q` or Ctrl-C, then release everything. Raises CameraError if frames stop.
 
     `output` receives cursor moves (default: none) and `display` is its size in pixels.
+    `debug_gestures` draws the gesture readout and stage timings (`timer` measures them).
     """
     controller = (
         None
         if calibrate
-        else Controller(config.timing, output or NoOutput(), make_cursor_path(config, display))
+        else Controller(
+            config.timing,
+            output or NoOutput(),
+            make_cursor_path(config, display),
+            config.open_palm,
+        )
     )
     meter = FpsMeter()
+    stages = StageTimes()
     missed = 0
     print(camera_on_line(config.camera), file=out)
     if calibrate:
@@ -103,7 +135,9 @@ def run_preview(
         print("warning: the Preview shows the camera image (--show-camera-image).", file=out)
     try:
         while True:
+            started = timer()
             raw = camera.read()
+            read_s = timer() - started
             if raw is None:
                 missed += 1
                 if missed >= MAX_MISSED_FRAMES:
@@ -113,8 +147,11 @@ def run_preview(
                 continue
             missed = 0
             now = clock()
+            started = timer()
             frame = prepare_frame(raw, config.camera.rotate, config.camera.mirror)
+            prepared = timer()
             landmarks = tracker.track(frame, now)
+            tracked = timer()
             camera_image = frame_to_image(frame) if show_camera_image else None
             if controller is None:
                 image = render_calibration(
@@ -127,6 +164,9 @@ def run_preview(
                 )
             else:
                 controller.update(now, landmarks)
+                debug = (
+                    DebugReadout(controller.reading, stages.readings()) if debug_gestures else None
+                )
                 image = render_preview(
                     controller.state,
                     controller.hold_progress,
@@ -135,9 +175,19 @@ def run_preview(
                     fps=meter.tick(now),
                     camera_image=camera_image,
                     show_camera_image=show_camera_image,
+                    debug=debug,
                 )
+            drawn = timer()
             window.show(image)
-            if window.quit_requested():
+            quit_requested = window.quit_requested()
+            if debug_gestures:
+                shown = timer()
+                stages.record("CAM", read_s)
+                stages.record("PREP", prepared - started)
+                stages.record("TRACK", tracked - prepared)
+                stages.record("DRAW", drawn - tracked)
+                stages.record("WIN", shown - drawn)
+            if quit_requested:
                 break
     except KeyboardInterrupt:
         pass
@@ -150,7 +200,11 @@ def run_preview(
 
 
 def run_live_preview(
-    config: Config, *, show_camera_image: bool = False, calibrate: bool = False
+    config: Config,
+    *,
+    show_camera_image: bool = False,
+    calibrate: bool = False,
+    debug_gestures: bool = False,
 ) -> int:
     """The real camera, Hand tracker and window. Returns the exit status."""
     try:
@@ -185,6 +239,7 @@ def run_live_preview(
             window,
             show_camera_image=show_camera_image,
             calibrate=calibrate,
+            debug_gestures=debug_gestures,
             output=output,
             display=output.display_size if output else DEFAULT_DISPLAY,
         )

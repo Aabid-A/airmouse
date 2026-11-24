@@ -34,7 +34,7 @@ Thumb tip and index tip brought together, measured relative to hand size. A shor
 _Avoid_: Tap, grab
 
 **Open palm**:
-All five fingers extended and spread. Pauses at once; held for about 0.8 s (configurable) it also unpauses, so it acts as a toggle.
+The four fingers held upright and extended, together or spread, scored from 0 to 1 against a threshold (`[open_palm]` in the config). The thumb and the spread only add a little, so a normal open hand counts; a fist, a Pointer pose and a Pinch never do. Pauses at once; held steady for about 0.8 s (configurable) it also unpauses, so it acts as a toggle.
 _Avoid_: Stop sign, high five
 
 **Hold ring**:

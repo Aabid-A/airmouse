@@ -40,10 +40,14 @@ class FakePreview:
     def __init__(self) -> None:
         self.calls: list[tuple[Config, bool]] = []
         self.calibrate: list[bool] = []
+        self.debug_gestures: list[bool] = []
 
-    def __call__(self, config: Config, *, show_camera_image: bool, calibrate: bool) -> int:
+    def __call__(
+        self, config: Config, *, show_camera_image: bool, calibrate: bool, debug_gestures: bool
+    ) -> int:
         self.calls.append((config, show_camera_image))
         self.calibrate.append(calibrate)
+        self.debug_gestures.append(debug_gestures)
         return 0
 
 

@@ -72,7 +72,9 @@ def test_the_preview_does_not_start_without_permissions(fake_preview: FakePrevie
 
 
 def test_the_exit_status_is_the_previews(granted_probe: PermissionProbe) -> None:
-    def failing(config: Config, *, show_camera_image: bool, calibrate: bool) -> int:
+    def failing(
+        config: Config, *, show_camera_image: bool, calibrate: bool, debug_gestures: bool
+    ) -> int:
         return 1
 
     assert main([], probe=granted_probe, preview=failing) == 1
@@ -102,3 +104,12 @@ def test_calibrate_is_off_by_default(
     assert main([], probe=granted_probe, preview=fake_preview) == 0
 
     assert fake_preview.calibrate == [False]
+
+
+def test_debug_gestures_is_off_by_default_and_reaches_the_preview_runner(
+    granted_probe: PermissionProbe, fake_preview: FakePreview
+) -> None:
+    assert main([], probe=granted_probe, preview=fake_preview) == 0
+    assert main(["--debug-gestures"], probe=granted_probe, preview=fake_preview) == 0
+
+    assert fake_preview.debug_gestures == [False, True]
