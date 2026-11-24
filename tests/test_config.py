@@ -4,6 +4,7 @@ import pytest
 
 from airmouse.cli import main
 from airmouse.config import Config, ConfigError, format_config, load_config
+from airmouse.permissions import PermissionProbe
 
 
 @pytest.fixture(autouse=True)
@@ -91,17 +92,20 @@ def test_flags_override_the_file(tmp_path: Path) -> None:
 
 
 def test_cli_flag_overrides_file_in_print_config(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], granted_probe: PermissionProbe
 ) -> None:
     path = write(tmp_path, "[camera]\nindex = 2\n")
 
-    assert main(["--config", str(path), "--camera", "7", "--print-config"]) == 0
+    argv = ["--config", str(path), "--camera", "7", "--print-config"]
+    assert main(argv, probe=granted_probe) == 0
 
     assert "index = 7" in capsys.readouterr().out
 
 
-def test_print_config_lists_every_effective_value(capsys: pytest.CaptureFixture[str]) -> None:
-    assert main(["--print-config"]) == 0
+def test_print_config_lists_every_effective_value(
+    capsys: pytest.CaptureFixture[str], granted_probe: PermissionProbe
+) -> None:
+    assert main(["--print-config"], probe=granted_probe) == 0
 
     out = capsys.readouterr().out
     for expected in [
@@ -169,12 +173,12 @@ def test_missing_explicit_file_and_bad_toml_are_errors(tmp_path: Path) -> None:
 
 
 def test_cli_exits_non_zero_and_names_the_key(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], granted_probe: PermissionProbe
 ) -> None:
     path = write(tmp_path, "[camera]\nindx = 1\n")
 
     with pytest.raises(SystemExit) as exit_info:
-        main(["--config", str(path), "--print-config"])
+        main(["--config", str(path), "--print-config"], probe=granted_probe)
 
     assert exit_info.value.code != 0
     assert "camera.indx" in capsys.readouterr().err
