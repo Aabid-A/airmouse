@@ -2,9 +2,10 @@
 
 `run_preview` is the loop, written against small adapters (camera, tracker,
 window) so tests drive it with fakes. `run_live_preview` wires the real ones.
-There is no cursor output yet: the controller gets a no-op output. In calibrate
-mode (`--calibrate`) the loop shows the Hand and the Active region instead and
-never builds a controller at all, so it can make no cursor input.
+The controller gets the real Quartz cursor output on macOS and a no-op output
+elsewhere (and in tests). In calibrate mode (`--calibrate`) the loop shows the
+Hand and the Active region instead and never builds a controller at all, so it
+can make no cursor input.
 Frames are rotated and mirrored by `prepare_frame` before tracking.
 """
 
@@ -16,8 +17,10 @@ from typing import TextIO
 from airmouse.calibrate import render_calibration
 from airmouse.camera import Camera, CameraError, OpenCvCamera, frame_to_image
 from airmouse.config import CameraConfig, Config
-from airmouse.controller import Controller
+from airmouse.controller import Controller, Output
 from airmouse.frame import prepare_frame
+from airmouse.mapping import make_cursor_path
+from airmouse.output import OutputError, QuartzOutput
 from airmouse.renderer import render_preview
 from airmouse.tracker import HandLandmarkerTracker, Tracker, TrackerError
 from airmouse.window import OpenCvWindow, Window
@@ -26,8 +29,15 @@ MAX_MISSED_FRAMES = 100  # this many empty reads in a row means the camera has g
 FPS_SMOOTHING = 0.1  # weight of the newest frame in the FPS readout
 
 
+# The display size the mapping assumes when there is no real output (a 16:10 laptop screen).
+DEFAULT_DISPLAY = (1440.0, 900.0)
+
+
 class NoOutput:
-    """The cursor output does not exist yet; Paused and active still show in the Preview."""
+    """No cursor input at all: Paused and active still show in the Preview."""
+
+    def move_cursor(self, x: float, y: float) -> None:
+        pass
 
     def release_drag(self) -> None:
         pass
@@ -66,11 +76,20 @@ def run_preview(
     *,
     show_camera_image: bool = False,
     calibrate: bool = False,
+    output: Output | None = None,
+    display: tuple[float, float] = DEFAULT_DISPLAY,
     clock: Callable[[], float] = time.monotonic,
     out: TextIO = sys.stdout,
 ) -> int:
-    """Run until `q` or Ctrl-C, then release everything. Raises CameraError if frames stop."""
-    controller = None if calibrate else Controller(config.timing, NoOutput())
+    """Run until `q` or Ctrl-C, then release everything. Raises CameraError if frames stop.
+
+    `output` receives cursor moves (default: none) and `display` is its size in pixels.
+    """
+    controller = (
+        None
+        if calibrate
+        else Controller(config.timing, output or NoOutput(), make_cursor_path(config, display))
+    )
     meter = FpsMeter()
     missed = 0
     print(camera_on_line(config.camera), file=out)
@@ -146,6 +165,13 @@ def run_live_preview(
         print(f"airmouse: {error}", file=sys.stderr)
         return 1
     try:
+        output = QuartzOutput.open() if sys.platform == "darwin" and not calibrate else None
+    except OutputError as error:
+        camera.release()
+        tracker.close()
+        print(f"airmouse: {error}", file=sys.stderr)
+        return 1
+    try:
         window = OpenCvWindow()
     except Exception:
         camera.release()
@@ -159,7 +185,9 @@ def run_live_preview(
             window,
             show_camera_image=show_camera_image,
             calibrate=calibrate,
+            output=output,
+            display=output.display_size if output else DEFAULT_DISPLAY,
         )
-    except CameraError as error:
+    except (CameraError, OutputError) as error:
         print(f"airmouse: {error}", file=sys.stderr)
         return 1
