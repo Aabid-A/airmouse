@@ -9,7 +9,7 @@
 
 Run it from the repo root on the Mac:
 
-    uv run spike/check.py --model path/to/hand_landmarker.task 2>/dev/null
+    uv run spike/check.py 2>/dev/null
 
 The `2>/dev/null` hides MediaPipe's and OpenCV's native log lines, so what you
 paste is only the result lines. Drop it if you want to see everything.
@@ -20,10 +20,9 @@ It checks three things and prints PASS or FAIL for each:
 2. camera: the camera opens at the size you ask for and delivers frames.
 3. accessibility: this terminal may move the cursor (Quartz CGEvent).
 
-The hand model is not bundled with mediapipe. Download it once yourself (this
-script never touches the network) and pass its path with --model:
-
-    https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task
+The hand model is not bundled with mediapipe. This repo vendors it in
+src/airmouse/assets/, which is the default for --model, so this script never
+touches the network. Pass --model PATH to try another file.
 
 This script saves no frame and makes no network call. (`uv run` itself fetches
 the script's dependencies the first time.) Paste the output into issue #2.
@@ -42,6 +41,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+DEFAULT_MODEL = Path(__file__).resolve().parent.parent / "src/airmouse/assets/hand_landmarker.task"
 ACCESSIBILITY_LIB = "/System/Library/Frameworks/ApplicationServices.framework/ApplicationServices"
 ACCESSIBILITY_PATH = "System Settings > Privacy & Security > Accessibility"
 CAMERA_PATH = "System Settings > Privacy & Security > Camera"
@@ -76,8 +76,8 @@ def check_mediapipe(model: Path | None) -> tuple[Step, Any, Any]:
     version = getattr(mp, "__version__", "?")
     if model is None or not model.is_file():
         detail = (
-            f"mediapipe {version} imports, but there is no model file. Download "
-            "hand_landmarker.task once (URL in `--help`) and pass it with --model PATH"
+            f"mediapipe {version} imports, but the model file was not found "
+            f"({model}). It is vendored in src/airmouse/assets/; or pass --model PATH"
         )
         return Step("mediapipe", False, detail), None, None
     try:
@@ -214,11 +214,13 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="uv run spike/check.py",
         description="Spike for issue #2: MediaPipe, the camera and Accessibility on this Mac.",
-        epilog="Model (download once, by hand): "
-        "https://storage.googleapis.com/mediapipe-models/hand_landmarker/"
-        "hand_landmarker/float16/1/hand_landmarker.task",
     )
-    parser.add_argument("--model", type=Path, help="path to hand_landmarker.task")
+    parser.add_argument(
+        "--model",
+        type=Path,
+        default=DEFAULT_MODEL,
+        help="path to hand_landmarker.task (default: the model vendored in this repo)",
+    )
     parser.add_argument("--camera", type=int, default=0, help="camera index (default 0)")
     parser.add_argument("--width", type=int, default=640, help="frame width (default 640)")
     parser.add_argument("--height", type=int, default=480, help="frame height (default 480)")
