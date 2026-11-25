@@ -7,7 +7,7 @@ moved right shows the skeleton moving right. It makes no cursor input.
 from airmouse.config import Config
 from airmouse.frame import DEFAULT_SCREEN_ASPECT, Frame, Region, active_region
 from airmouse.gestures import Landmarks
-from airmouse.renderer import Image, render_calibrate
+from airmouse.renderer import FrameView, Image, render_calibrate
 
 
 def region_for(
@@ -28,8 +28,9 @@ def render_calibration(
     show_camera_image: bool,
 ) -> Image:
     """One calibrate-mode view of a prepared `frame` and the Hand found in it."""
+    height, width = frame.shape[:2]
     return render_calibrate(
-        region_for(config, frame),
+        FrameView(width, height, region_for(config, frame)),
         landmarks=landmarks,
         camera_on=True,
         fps=fps,

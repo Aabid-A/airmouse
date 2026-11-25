@@ -6,7 +6,7 @@ from typing import Any, Protocol
 from airmouse.renderer import Image
 
 WINDOW_TITLE = "airmouse Preview"
-DISPLAY_SCALE = 2  # the Preview is drawn at 320x240; show it twice as large
+DISPLAY_SCALE = 2  # the Preview is drawn at 640x360 (16:9); show it at 1280x720
 QUIT_KEY = "q"
 
 

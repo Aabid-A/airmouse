@@ -20,9 +20,9 @@ from airmouse.camera import Camera, CameraError, OpenCvCamera, frame_to_image
 from airmouse.config import CameraConfig, Config
 from airmouse.controller import Controller, Output
 from airmouse.frame import prepare_frame
-from airmouse.mapping import make_cursor_path
+from airmouse.mapping import make_cursor_path, mapped_region
 from airmouse.output import OutputError, QuartzOutput
-from airmouse.renderer import DebugReadout, render_preview
+from airmouse.renderer import DebugReadout, FrameView, render_preview
 from airmouse.tracker import HandLandmarkerTracker, Tracker, TrackerError
 from airmouse.window import OpenCvWindow, Window
 
@@ -139,6 +139,7 @@ def run_preview(
             config.pinch,
         )
     )
+    region = mapped_region(config, display)  # the Preview outlines what the cursor maps
     meter = FpsMeter()
     stages = StageTimes()
     missed = 0
@@ -195,6 +196,8 @@ def run_preview(
                     show_camera_image=show_camera_image,
                     debug=debug,
                     no_hand=controller.no_hand,
+                    phase=controller.phase,
+                    view=FrameView(frame.shape[1], frame.shape[0], region),
                 )
             drawn = timer()
             window.show(image)

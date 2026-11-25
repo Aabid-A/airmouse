@@ -7,6 +7,7 @@ import numpy as np
 import pytest
 
 from airmouse.app import (
+    DEFAULT_DISPLAY,
     MAX_MISSED_FRAMES,
     FpsMeter,
     StageTimes,
@@ -15,9 +16,28 @@ from airmouse.app import (
 )
 from airmouse.camera import CameraError
 from airmouse.config import CameraConfig, Config
+from airmouse.controller import State
 from airmouse.frame import active_region
 from airmouse.gestures import Landmarks
-from airmouse.renderer import PALETTE, REGION_OUTLINE, WIDTH, Image, render_calibrate
+from airmouse.mapping import mapped_region
+from airmouse.renderer import (
+    BACKGROUND,
+    CAMERA_ON_DOT,
+    DEBUG_BAR_OFFSET,
+    DEBUG_BAR_WIDTH,
+    DEBUG_LEFT,
+    DEBUG_TOP,
+    HEIGHT,
+    JOINT_PAUSED,
+    REGION_OUTLINE,
+    STATUS_TEXT,
+    TEXT_ACTIVE,
+    WIDTH,
+    FrameView,
+    Image,
+    render_calibrate,
+    render_preview,
+)
 from hands import open_hand, pointing_hand
 
 FRAME_S = 1 / 30
@@ -40,6 +60,16 @@ class FakeCamera:
 
     def release(self) -> None:
         self.released = True
+
+
+class NoisyCamera(FakeCamera):
+    """A camera whose frames are random pixels: anything of them in the Preview would show."""
+
+    def read(self) -> Any:
+        flat = super().read()
+        if flat is None:
+            return None
+        return np.random.default_rng(self.reads).integers(0, 256, flat.shape, dtype=np.uint8)
 
 
 class FakeTracker:
@@ -157,19 +187,34 @@ def test_each_frame_is_drawn_with_the_hand_the_indicator_and_fps() -> None:
     run(FakeCamera(), window)
 
     last = window.images[-1]
-    assert (last.width, last.height) == (WIDTH, 240)
-    # The red Camera-on dot is drawn, and the Hand's joints are drawn.
-    assert last.get(14, 17) == (235, 70, 70)
-    assert any(last.get(x, y) == (210, 225, 240) for x in range(WIDTH) for y in range(240))
+    assert (last.width, last.height) == (WIDTH, HEIGHT)
+    # The red Camera-on dot is drawn, and the Hand's joints are drawn (greys: it starts Paused).
+    assert CAMERA_ON_DOT in {last.get(x, y) for x in range(40) for y in range(40)}
+    assert any(last.get(x, y) == JOINT_PAUSED for x in range(WIDTH) for y in range(HEIGHT))
+
+
+def same_images(first: FakeWindow, second: FakeWindow) -> bool:
+    return [image.pixels for image in first.images] == [image.pixels for image in second.images]
 
 
 def test_the_default_preview_never_contains_camera_pixels() -> None:
-    window = FakeWindow(frames=4)
+    flat, noisy = FakeWindow(frames=4), FakeWindow(frames=4)
 
-    run(FakeCamera(), window)
+    run(FakeCamera(), flat)
+    run(NoisyCamera(), noisy)
 
-    for image in window.images:
-        assert {image.get(x, y) for x in range(0, WIDTH, 3) for y in range(240)} <= PALETTE
+    assert same_images(flat, noisy)  # the frame's pixels change nothing in the Preview
+
+
+def test_the_preview_fits_the_prepared_frame_and_outlines_the_mapped_region() -> None:
+    config = Config(camera=CameraConfig(rotate=90))
+    window = FakeWindow(frames=1)
+
+    run(FakeCamera(), window, config=config)
+
+    view = FrameView(480, 640, mapped_region(config, DEFAULT_DISPLAY))
+    expected = render_preview(State.PAUSED, landmarks=open_hand(), camera_on=True, view=view)
+    assert window.images[0].pixels == expected.pixels
 
 
 def test_the_camera_image_is_shown_only_with_the_opt_in_flag() -> None:
@@ -247,12 +292,9 @@ def test_calibrate_shows_the_hand_and_the_active_region() -> None:
 
     assert status == 0
     assert len(window.images) == 2
-    assert (
-        render_calibrate(
-            active_region(640, 480, 0.6), landmarks=open_hand(), camera_on=True, fps=None
-        ).pixels
-        == window.images[0].pixels
-    )
+    view = FrameView(640, 480, active_region(640, 480, 0.6))
+    expected = render_calibrate(view, landmarks=open_hand(), camera_on=True, fps=None)
+    assert expected.pixels == window.images[0].pixels
     assert REGION_OUTLINE in {
         window.images[1].get(x, y) for x in range(WIDTH) for y in range(window.images[1].height)
     }
@@ -277,7 +319,10 @@ def test_calibrate_follows_the_rotated_frame() -> None:
     run(FakeCamera(), window, calibrate=True, config=config)
 
     expected = render_calibrate(
-        active_region(480, 640, 0.6), landmarks=open_hand(), camera_on=True, fps=None
+        FrameView(480, 640, active_region(480, 640, 0.6)),
+        landmarks=open_hand(),
+        camera_on=True,
+        fps=None,
     )
     assert window.images[0].pixels == expected.pixels
 
@@ -339,9 +384,10 @@ def test_the_default_preview_has_no_gesture_readout() -> None:
     run(FakeCamera(), plain)
     run(FakeCamera(), flagged, debug_gestures=False)
 
-    assert [image.pixels for image in plain.images] == [image.pixels for image in flagged.images]
+    assert same_images(plain, flagged)
     # Nothing is drawn under the Camera-on indicator where the readout would start.
-    assert {plain.images[-1].get(x, 40) for x in range(6, 90)} == {(16, 16, 16)}
+    row = range(DEBUG_LEFT, DEBUG_LEFT + DEBUG_BAR_WIDTH)
+    assert {plain.images[-1].get(x, DEBUG_TOP + 2) for x in row} == {BACKGROUND}
 
 
 def test_debug_gestures_draws_the_readout_on_every_frame() -> None:
@@ -352,7 +398,6 @@ def test_debug_gestures_draws_the_readout_on_every_frame() -> None:
 
     for before, after in zip(plain.images, debug.images, strict=True):
         assert before.pixels != after.pixels
-        assert {after.get(x, y) for x in range(0, WIDTH) for y in range(240)} <= PALETTE
 
 
 def test_the_readout_shows_the_open_palm_score_and_the_stage_timings() -> None:
@@ -362,19 +407,26 @@ def test_the_readout_shows_the_open_palm_score_and_the_stage_timings() -> None:
 
     image = window.images[-1]
     # The open hand counts: the score bar is green (the readout is not a mock-up).
-    assert any(image.get(x, 46) == (90, 200, 120) for x in range(6, 86))
+    bar_row = DEBUG_TOP + DEBUG_BAR_OFFSET + 2
+    row = range(DEBUG_LEFT, DEBUG_LEFT + DEBUG_BAR_WIDTH)
+    assert any(image.get(x, bar_row) == TEXT_ACTIVE for x in row)
     # Five timing rows are drawn at the right.
-    rows = {y for y in range(34, 90) for x in range(236, 315) if image.get(x, y) == (150, 150, 150)}
+    rows = {
+        y
+        for y in range(DEBUG_TOP, DEBUG_TOP + 60)
+        for x in range(WIDTH - 100, WIDTH - DEBUG_LEFT)
+        if image.get(x, y) == STATUS_TEXT
+    }
     assert len(rows) >= 5 * 5
 
 
 def test_the_readout_never_contains_camera_pixels_without_the_opt_in() -> None:
-    window = FakeWindow(frames=4)
+    flat, noisy = FakeWindow(frames=4), FakeWindow(frames=4)
 
-    run(FakeCamera(), window, debug_gestures=True)
+    run(FakeCamera(), flat, debug_gestures=True)
+    run(NoisyCamera(), noisy, debug_gestures=True)
 
-    for image in window.images:
-        assert {image.get(x, y) for x in range(0, WIDTH) for y in range(240)} <= PALETTE
+    assert same_images(flat, noisy)
 
 
 def test_calibrate_ignores_debug_gestures() -> None:
