@@ -7,14 +7,19 @@ value that each publish overwrites, so there is no queue and no backlog. The
 Preview (on the main thread, see `app.run_preview`) draws whatever is latest and
 never holds the worker up; the worker never waits for the Preview.
 
-Only the worker thread touches the Controller. The one exception to "only the
+Only the worker thread touches the Controller, the tracker and the camera; it
+also closes the tracker and releases the camera itself once its loop has ended,
+so neither is ever closed under a call still running on it. The cursor output
+reaches the Controller through a `ShutdownOutput`. The one exception to "only the
 worker touches the output" is `Worker.stop`: if the worker does not stop in time
-(stuck in a camera read), the main thread lifts a held mouse button itself, and
-`release_drag` runs exactly once whichever thread gets there first.
+(stuck in a camera read, the tracker or the output), the main thread closes the
+`ShutdownOutput`, which lifts a held button once and then ignores every later
+call, so a worker that wakes up afterwards can never press the button again.
 
 The worker is a daemon thread only so that a camera read stuck in native code
 can never keep the process alive after the main thread has finished shutting
-down. It is always stopped explicitly (`stop`, which waits with a timeout).
+down. It is always stopped explicitly (`stop`, which waits with a timeout). A
+worker that never comes back leaves the camera and tracker to the process exit.
 """
 
 import threading
@@ -75,6 +80,69 @@ class StageTimes:
 
     def readings(self) -> tuple[tuple[str, float], ...]:
         return tuple(self._ms.items())
+
+
+class ShutdownOutput:
+    """The cursor output as the Controller sees it, closed for good on the way out.
+
+    Every call goes through one lock. `close` lifts a held button exactly once,
+    from whichever thread closes first, and every call after it is ignored, so a
+    press that arrives after shutdown never reaches the Mac. If `close` cannot get
+    the lock in time (the worker is inside an output call), it leaves a flag, and
+    the worker lifts the button as soon as that call returns.
+    """
+
+    def __init__(self, output: Output, out: TextIO) -> None:
+        self._output = output
+        self._out = out
+        self._lock = threading.Lock()
+        self._closing = threading.Event()
+        self._closed = False
+
+    def move_cursor(self, x: float, y: float) -> None:
+        self._forward(lambda: self._output.move_cursor(x, y))
+
+    def press(self, x: float, y: float) -> None:
+        self._forward(lambda: self._output.press(x, y))
+
+    def drag_to(self, x: float, y: float) -> None:
+        self._forward(lambda: self._output.drag_to(x, y))
+
+    def release(self, x: float, y: float) -> None:
+        self._forward(lambda: self._output.release(x, y))
+
+    def release_drag(self) -> None:
+        self._forward(self._output.release_drag)
+
+    def close(self, timeout: float = -1) -> None:
+        """Lift a held button once and ignore everything after. `timeout` < 0 waits as long
+        as it takes; otherwise, if the lock is busy, the call holding it lifts the button."""
+        self._closing.set()
+        if not self._lock.acquire(timeout=timeout):
+            return
+        try:
+            self._close_locked()
+        finally:
+            self._lock.release()
+
+    def _forward(self, call: Callable[[], None]) -> None:
+        with self._lock:
+            if self._closed:
+                return
+            try:
+                call()
+            finally:
+                if self._closing.is_set():
+                    self._close_locked()
+
+    def _close_locked(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
+        try:
+            self._output.release_drag()
+        except OutputError as error:
+            print(f"airmouse: could not release the mouse button: {error}", file=self._out)
 
 
 class LatestSlot[T]:
@@ -180,12 +248,11 @@ class Worker:
         slot: LatestSlot[Snapshot],
         *,
         controller: Controller | None,
-        output: Output | None,
+        output: ShutdownOutput | None,
         region: Region,
         show_camera_image: bool,
         clock: Callable[[], float],
         timer: Callable[[], float],
-        out: TextIO,
     ) -> None:
         self._config = config
         self._camera = camera
@@ -197,31 +264,33 @@ class Worker:
         self._show_camera_image = show_camera_image
         self._clock = clock
         self._timer = timer
-        self._out = out
         self._meter = FpsMeter()
         self._stages = StageTimes()
         self._missed = 0
         self._number = 0
         self._last_delivery: float | None = None
         self._stopping = threading.Event()
-        self._release_lock = threading.Lock()
-        self._released = False
         self._thread = threading.Thread(target=self._run, name=WORKER_NAME, daemon=True)
         self.error: BaseException | None = None
 
     def start(self) -> None:
         self._thread.start()
 
-    def stop(self, timeout: float) -> None:
-        """Ask the worker to stop and wait up to `timeout` seconds.
+    def stop(self, timeout: float) -> bool:
+        """Ask the worker to stop and wait up to `timeout` seconds. True if it stopped.
 
-        If it is still running (stuck in a camera read), lift a held mouse button
-        from this thread: the button is never left down.
+        If it is still running (stuck in a camera read, the tracker or the output),
+        close the output from this thread: a held button is lifted and nothing
+        reaches the Mac after. The worker still closes the tracker and the camera
+        itself if it ever comes back.
         """
         self._stopping.set()
         self._thread.join(timeout)
-        if self._thread.is_alive() and self._output is not None:
-            self._release_once(self._output.release_drag)
+        if not self._thread.is_alive():
+            return True
+        if self._output is not None:
+            self._output.close(timeout)
+        return False
 
     def step(self) -> Snapshot | None:
         """One trip: read, prepare, track, update the Controller, publish. None if no frame."""
@@ -287,17 +356,19 @@ class Worker:
         except BaseException as error:  # kept for the main thread to re-raise
             self.error = error
         finally:
-            if self._controller is not None:
-                self._release_once(self._controller.release_drag)
+            try:
+                self._shut_down()
+            except BaseException as error:
+                self.error = self.error or error
             self._slot.close()
 
-    def _release_once(self, release: Callable[[], None]) -> None:
-        """Lift the button on the way out, once, from whichever thread gets here first."""
-        with self._release_lock:
-            if self._released:
-                return
-            self._released = True
+    def _shut_down(self) -> None:
+        """On this thread, once the loop has ended: lift the button, close the tracker, camera."""
         try:
-            release()
-        except OutputError as error:
-            print(f"airmouse: could not release the mouse button: {error}", file=self._out)
+            if self._output is not None:
+                self._output.close()
+        finally:
+            try:
+                self._tracker.close()
+            finally:
+                self._camera.release()

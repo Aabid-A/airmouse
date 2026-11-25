@@ -34,7 +34,7 @@ from airmouse.renderer import (
     render_preview,
 )
 from hands import open_hand, pointing_hand
-from lockstep import WAIT_S, ThreadClock, lockstep
+from lockstep import WAIT_S, ThreadClock, join_worker, lockstep
 
 FRAME_S = 1 / 30
 
@@ -236,8 +236,10 @@ def test_the_tracker_is_fed_the_clock_time() -> None:
 
     run(FakeCamera(), FakeWindow(frames=3), tracker)
 
-    # The worker may track a frame more while the Preview quits; the first three are shown.
     assert tracker.times[:3] == pytest.approx([FRAME_S, 2 * FRAME_S, 3 * FRAME_S])
+    # The worker may track a frame more while the Preview quits; every one is the next tick.
+    expected = [FRAME_S * (index + 1) for index in range(len(tracker.times))]
+    assert tracker.times == pytest.approx(expected)
 
 
 def test_a_camera_that_stops_delivering_frames_is_an_error_and_is_released() -> None:
@@ -251,7 +253,7 @@ def test_a_camera_that_stops_delivering_frames_is_an_error_and_is_released() -> 
 
 
 class SilentCamera(FakeCamera):
-    """A camera that gives no frame: each read waits until the camera is released."""
+    """A camera that gives no frame: each read waits until the test lets it return."""
 
     def __init__(self) -> None:
         super().__init__(frames=0)
@@ -260,10 +262,6 @@ class SilentCamera(FakeCamera):
     def read(self) -> Any:
         self.unblocked.wait(WAIT_S)
         return super().read()
-
-    def release(self) -> None:
-        super().release()
-        self.unblocked.set()
 
 
 def test_q_works_while_the_camera_is_giving_no_frames() -> None:
@@ -274,8 +272,11 @@ def test_q_works_while_the_camera_is_giving_no_frames() -> None:
     )
 
     assert status == 0
-    assert camera.released
     assert window.images == []
+    assert not camera.released  # never released under the read still waiting in it
+    camera.unblocked.set()
+    join_worker()
+    assert camera.released  # the worker released it once the read returned
 
 
 def test_no_file_is_written_while_the_preview_runs(

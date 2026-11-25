@@ -13,6 +13,7 @@ import threading
 from typing import Any
 
 from airmouse.camera import Camera
+from airmouse.pipeline import WORKER_NAME
 from airmouse.renderer import Image
 from airmouse.window import Window
 
@@ -113,3 +114,11 @@ class ThreadClock:
         now: float = getattr(self._local, "now", 0.0) + self._step
         self._local.now = now
         return now
+
+
+def join_worker() -> None:
+    """Wait for the worker thread to end (after a test let a stuck call return)."""
+    for thread in threading.enumerate():
+        if thread.name == WORKER_NAME:
+            thread.join(WAIT_S)
+            assert not thread.is_alive(), "the worker thread did not end"

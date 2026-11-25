@@ -66,7 +66,7 @@ _Avoid_: Lost, tracking failure
 _Avoid_: Setup wizard
 
 **Cursor path**:
-Everything from the camera to the cursor: camera read, frame preparation, the Hand tracker, the Controller and the cursor output. It runs on its own worker thread and never waits for the Preview (ADR 0004).
+Everything from the camera to the cursor: camera read, frame preparation, the Hand tracker, the Controller and the cursor output. It runs on its own worker thread and never waits for the Preview (ADR 0004). In code it lives in `airmouse.pipeline`.
 _Avoid_: Pipeline (ambiguous), backend
 
 **Snapshot**:

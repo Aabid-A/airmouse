@@ -15,7 +15,7 @@ import numpy as np
 import pytest
 
 import airmouse.app
-from airmouse.app import DEFAULT_DISPLAY, run_live_preview, run_preview
+from airmouse.app import DEFAULT_DISPLAY, STUCK_MESSAGE, run_live_preview, run_preview
 from airmouse.camera import CameraError
 from airmouse.config import Config
 from airmouse.controller import Controller, State
@@ -23,11 +23,11 @@ from airmouse.frame import active_region
 from airmouse.gestures import Landmarks, Point
 from airmouse.mapping import make_cursor_path, mapped_region
 from airmouse.output import OutputError
-from airmouse.pipeline import WORKER_NAME, LatestSlot, Snapshot, Worker
+from airmouse.pipeline import WORKER_NAME, LatestSlot, ShutdownOutput, Snapshot, Worker
 from airmouse.renderer import DebugReadout, Image
 from airmouse.tracker import TrackerError
 from hands import open_hand, pointing_hand
-from lockstep import WAIT_S, ThreadClock, lockstep
+from lockstep import WAIT_S, ThreadClock, join_worker, lockstep
 from test_pinch import AIM, Clock, RecordingOutput, Script, drag_script, hand
 
 FRAME_S = 1 / 30
@@ -141,12 +141,13 @@ def make_worker(
     show_camera_image: bool = False,
 ) -> tuple[Worker, LatestSlot[Snapshot]]:
     config = Config()
+    guarded = None if output is None else ShutdownOutput(output, io.StringIO())
     controller = (
         None
-        if output is None
+        if guarded is None
         else Controller(
             config.timing,
-            output,
+            guarded,
             make_cursor_path(config, DEFAULT_DISPLAY),
             config.open_palm,
             config.pinch,
@@ -159,12 +160,11 @@ def make_worker(
         tracker,
         slot,
         controller=controller,
-        output=output,
+        output=guarded,
         region=mapped_region(config, DEFAULT_DISPLAY),
         show_camera_image=show_camera_image,
         clock=Clock(),
         timer=Clock(),
-        out=io.StringIO(),
     )
     return worker, slot
 
@@ -305,14 +305,14 @@ def test_a_blocked_preview_never_slows_the_cursor_path() -> None:
 
 
 class StallingCamera:
-    """Gives `frames` frames, then blocks in `read` until it is released."""
+    """Gives `frames` frames, then blocks in `read` until the test lets it return."""
 
     def __init__(self, frames: int) -> None:
         self.frames = frames
         self.reads = 0
         self.stalled = threading.Event()
         self.unblocked = threading.Event()
-        self.releases = 0
+        self.released_by: list[threading.Thread] = []
 
     def read(self) -> Any:
         self.reads += 1
@@ -323,8 +323,8 @@ class StallingCamera:
         return None
 
     def release(self) -> None:
-        self.releases += 1
-        self.unblocked.set()
+        assert not self.stalled.is_set() or self.unblocked.is_set(), "released under a read"
+        self.released_by.append(threading.current_thread())
 
 
 class RecordingWindow:
@@ -349,30 +349,38 @@ class RecordingWindow:
         self.closed = True
 
 
-class QuitWhenStalledWindow(RecordingWindow):
-    """Keeps checking for `q` while the worker is stalled, then quits (or gets Ctrl-C)."""
+class QuitWhenStuckWindow(RecordingWindow):
+    """Keeps checking for `q` once the worker is stuck, then quits (or gets Ctrl-C)."""
 
-    def __init__(self, camera: StallingCamera, *, checks: int = 3, interrupt: bool = False) -> None:
+    def __init__(self, stuck: threading.Event, *, checks: int = 3, interrupt: bool = False) -> None:
         super().__init__(frames=0)
-        self.camera = camera
+        self.stuck = stuck
         self.checks = checks
         self.interrupt = interrupt
-        self.checks_while_stalled = 0
+        self.checks_while_stuck = 0
 
     def quit_requested(self) -> bool:
-        if not self.camera.stalled.is_set():
+        if not self.stuck.is_set():
             return False
-        self.checks_while_stalled += 1
-        if self.checks_while_stalled < self.checks:
+        self.checks_while_stuck += 1
+        if self.checks_while_stuck < self.checks:
             return False
         if self.interrupt:
             raise KeyboardInterrupt
         return True
 
 
+def main_thread_calls(output: ThreadRecordingOutput) -> list[str]:
+    main = threading.current_thread()
+    return [
+        kind for kind, thread in zip(output.kinds(), output.threads, strict=True) if thread is main
+    ]
+
+
 def test_a_stalled_camera_never_freezes_the_preview_and_it_invents_no_state() -> None:
     camera = StallingCamera(frames=1)
-    window = QuitWhenStalledWindow(camera, checks=5)
+    window = QuitWhenStuckWindow(camera.stalled, checks=5)
+    out = io.StringIO()
 
     status = run_preview(
         Config(),
@@ -380,15 +388,20 @@ def test_a_stalled_camera_never_freezes_the_preview_and_it_invents_no_state() ->
         Script(lambda _: open_hand()),
         window,
         clock=Clock(),
-        out=io.StringIO(),
+        out=out,
         stop_timeout_s=0.01,
     )
 
     assert status == 0
-    assert window.checks_while_stalled == 5  # it kept answering `q` while the worker was stuck
+    assert window.checks_while_stuck == 5  # it kept answering `q` while the worker was stuck
     assert len(window.images) == 1  # only the one state the worker reported
-    assert camera.releases == 1
     assert window.closed
+    assert camera.released_by == []  # never released under the read still in it
+    assert out.getvalue().splitlines()[-2:] == [STUCK_MESSAGE, "camera off"]
+
+    camera.unblocked.set()
+    join_worker()
+    assert [thread.name for thread in camera.released_by] == [WORKER_NAME]
 
 
 @pytest.mark.parametrize("interrupt", [False, True], ids=["q", "ctrl-c"])
@@ -397,7 +410,7 @@ def test_quitting_while_the_worker_is_stuck_mid_drag_lifts_the_button_once(
 ) -> None:
     output = ThreadRecordingOutput()
     camera = StallingCamera(frames=60)  # dragging by then (see drag_script)
-    window = QuitWhenStalledWindow(camera, interrupt=interrupt)
+    window = QuitWhenStuckWindow(camera.stalled, interrupt=interrupt)
     out = io.StringIO()
 
     status = run_preview(
@@ -410,17 +423,132 @@ def test_quitting_while_the_worker_is_stuck_mid_drag_lifts_the_button_once(
         out=out,
         stop_timeout_s=0.01,
     )
-    worker = worker_thread()
-    if worker is not None:
-        worker.join(WAIT_S)  # the released camera let the stuck read return
 
     assert status == 0
     assert "drag" in output.kinds()
-    assert output.kinds().count("release_drag") == 1
-    assert output.threads[-1] is threading.current_thread()  # lifted from the main thread
+    assert main_thread_calls(output) == ["release_drag"]  # the main thread's only output call
+    assert output.kinds()[-1] == "release_drag"
     assert not output.down
-    assert camera.releases == 1
     assert out.getvalue().splitlines()[-1] == "camera off"
+
+    camera.unblocked.set()  # the stuck read returns: the worker ends and releases the camera
+    join_worker()
+    assert output.kinds().count("release_drag") == 1
+    assert main_thread_calls(output) == ["release_drag"]
+    assert not output.down
+    assert [thread.name for thread in camera.released_by] == [WORKER_NAME]
+
+
+class StuckTracker(Script):
+    """Blocks inside `track` on frame `at` until the test lets it return."""
+
+    def __init__(self, at: int) -> None:
+        super().__init__(drag_script)
+        self.at = at
+        self.stuck = threading.Event()
+        self.unblocked = threading.Event()
+        self.in_track = False
+        self.closed_by: list[threading.Thread] = []
+
+    def track(self, frame: Any, time_s: float) -> Landmarks | None:
+        if self.frame == self.at:
+            self.in_track = True
+            self.stuck.set()
+            self.unblocked.wait(WAIT_S)
+            self.in_track = False
+        return super().track(frame, time_s)
+
+    def close(self) -> None:
+        assert not self.in_track, "the tracker was closed under a running track"
+        self.closed_by.append(threading.current_thread())
+
+
+PRESS_FRAME = 42  # drag_script: the Pinch closed at 36 and has moved far enough to drag
+
+
+def test_drag_script_presses_on_press_frame() -> None:
+    # The control for the next test: frame PRESS_FRAME is the one that presses.
+    output = RecordingOutput()
+    worker, _ = make_worker(Script(drag_script), output)
+
+    for _ in range(PRESS_FRAME):
+        worker.step()
+    assert "press" not in output.kinds()
+    worker.step()
+    assert "press" in output.kinds()
+
+
+def test_a_worker_stuck_in_the_tracker_never_presses_after_shutdown() -> None:
+    output = ThreadRecordingOutput()
+    tracker = StuckTracker(at=PRESS_FRAME)
+    camera = StallingCamera(frames=1000)
+    window = QuitWhenStuckWindow(tracker.stuck)
+
+    status = run_preview(
+        Config(),
+        camera,
+        tracker,
+        window,
+        output=output,
+        clock=Clock(),
+        out=io.StringIO(),
+        stop_timeout_s=0.01,
+    )
+
+    assert status == 0
+    assert main_thread_calls(output) == ["release_drag"]  # shutdown, before the press
+    assert tracker.closed_by == []  # not closed while `track` is still running
+    assert camera.released_by == []
+
+    tracker.unblocked.set()  # the worker wakes up holding a closed Pinch and would press
+    join_worker()
+
+    assert "press" not in output.kinds()  # nothing reached the Mac after shutdown
+    assert not output.down
+    assert output.kinds().count("release_drag") == 1
+    assert [thread.name for thread in tracker.closed_by] == [WORKER_NAME]
+    assert [thread.name for thread in camera.released_by] == [WORKER_NAME]
+
+
+class StuckPressOutput(ThreadRecordingOutput):
+    """Blocks inside `press` until the test lets it return."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.stuck = threading.Event()
+        self.unblocked = threading.Event()
+
+    def press(self, x: float, y: float) -> None:
+        self.stuck.set()
+        self.unblocked.wait(WAIT_S)
+        super().press(x, y)
+
+
+def test_a_press_in_progress_at_shutdown_is_lifted_as_soon_as_it_returns() -> None:
+    output = StuckPressOutput()
+    window = QuitWhenStuckWindow(output.stuck)
+
+    status = run_preview(
+        Config(),
+        StallingCamera(frames=1000),
+        Script(drag_script),
+        window,
+        output=output,
+        clock=Clock(),
+        out=io.StringIO(),
+        stop_timeout_s=0.01,
+    )
+
+    assert status == 0
+    assert main_thread_calls(output) == []  # the press held the output: no call from here
+
+    output.unblocked.set()
+    join_worker()
+
+    assert output.kinds()[-2:] == ["press", "release_drag"]
+    assert output.kinds().count("release_drag") == 1
+    assert not output.down
+    assert main_thread_calls(output) == []
 
 
 def test_on_a_normal_quit_only_the_worker_touches_the_output_and_the_tracker() -> None:
@@ -593,7 +721,7 @@ def test_the_worker_thread_is_a_daemon_so_a_stuck_read_cannot_keep_the_process_a
     camera = StallingCamera(frames=0)
     daemon: list[bool] = []
 
-    class CheckingWindow(QuitWhenStalledWindow):
+    class CheckingWindow(QuitWhenStuckWindow):
         def quit_requested(self) -> bool:
             thread = worker_thread()
             daemon.append(thread is not None and thread.daemon)
@@ -603,9 +731,36 @@ def test_the_worker_thread_is_a_daemon_so_a_stuck_read_cannot_keep_the_process_a
         Config(),
         camera,
         ListTracker(None),
-        CheckingWindow(camera, checks=1),
+        CheckingWindow(camera.stalled, checks=1),
         out=io.StringIO(),
         stop_timeout_s=0.01,
     )
+    camera.unblocked.set()
+    join_worker()
 
     assert daemon and all(daemon)
+
+
+def test_a_closed_output_lifts_the_button_once_and_ignores_everything_after() -> None:
+    output = RecordingOutput()
+    guarded = ShutdownOutput(output, io.StringIO())
+    guarded.press(1, 2)
+
+    guarded.close()
+    guarded.close()
+    guarded.press(3, 4)
+    guarded.drag_to(5, 6)
+    guarded.move_cursor(7, 8)
+    guarded.release_drag()
+
+    assert output.kinds() == ["press", "release_drag"]
+    assert not output.down
+
+
+def test_a_failing_lift_on_close_is_reported_not_raised() -> None:
+    output = RecordingOutput(fail_on="release_drag")
+    out = io.StringIO()
+
+    ShutdownOutput(output, out).close()
+
+    assert "could not release the mouse button" in out.getvalue()

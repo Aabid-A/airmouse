@@ -29,7 +29,7 @@ no camera image anywhere, so its Preview is safe to screen-record and share.
 
 ## How it works
 
-Each camera frame goes through one pipeline:
+Each camera frame goes through these steps:
 
 1. **Camera.** OpenCV reads a frame. The frame is rotated and mirrored as the config says,
    so a hand moved right moves right in the picture.
@@ -52,9 +52,12 @@ the worker publishes a Snapshot, an immutable copy of the latest state, into a s
 keeps only the newest one. The main thread draws the latest Snapshot, shows it and checks
 for `q`. Neither waits for the other: a slow window never slows the cursor, and a stalled
 camera never freezes the window, which keeps showing the last state the worker reported.
-On `q` or Ctrl-C the main thread stops the worker and waits up to a second; if the worker
-is stuck in a camera read, the main thread lifts any held mouse button itself. Then it
-closes the window, the tracker and the camera. See
+On `q` or Ctrl-C the main thread stops the worker and waits up to a second. The worker
+lifts any held mouse button, closes the tracker and releases the camera on its way out.
+If it is stuck (in a camera read, the tracker or the output), the main thread lifts the
+button itself and shuts the output, so nothing the worker does later reaches the Mac; the
+tracker and the camera are never closed under a call still running on them, and are
+released when the worker comes back or when airmouse exits. See
 [ADR 0004](docs/adr/0004-cursor-path-on-a-worker-thread.md).
 
 Terms used in this document are defined in [GLOSSARY.md](GLOSSARY.md).

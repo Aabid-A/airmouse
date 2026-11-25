@@ -31,7 +31,7 @@ from airmouse.config import CameraConfig, Config
 from airmouse.controller import Controller, Output
 from airmouse.mapping import make_cursor_path, mapped_region
 from airmouse.output import OutputError, QuartzOutput
-from airmouse.pipeline import FpsMeter, LatestSlot, Snapshot, StageTimes, Worker
+from airmouse.pipeline import FpsMeter, LatestSlot, ShutdownOutput, Snapshot, StageTimes, Worker
 from airmouse.renderer import DebugReadout, Image, render_calibrate, render_preview
 from airmouse.tracker import HandLandmarkerTracker, Tracker, TrackerError
 from airmouse.window import OpenCvWindow, Window
@@ -39,9 +39,13 @@ from airmouse.window import OpenCvWindow, Window
 # With no new Snapshot, the Preview still checks for `q` (and keeps the window alive)
 # this often, without spinning.
 UI_WAIT_S = 0.03
-# How long quitting waits for the worker before it lifts a held button itself and
-# releases the camera (which unblocks a stuck camera read).
+# How long quitting waits for the worker before it lifts a held button itself.
 STOP_TIMEOUT_S = 1.0
+
+STUCK_MESSAGE = (
+    "airmouse: the camera, tracker or cursor output did not stop in time; "
+    "the button is up, and the camera is released when airmouse exits."
+)
 
 # The display size the mapping assumes when there is no real output (a 16:10 laptop screen).
 DEFAULT_DISPLAY = (1440.0, 900.0)
@@ -189,7 +193,7 @@ def run_preview(
     `debug_gestures` draws the gesture readout and stage timings (`timer` measures them).
     The worker thread's errors are raised here, after everything is released.
     """
-    cursor_output = None if calibrate else (output or NoOutput())
+    cursor_output = None if calibrate else ShutdownOutput(output or NoOutput(), out)
     controller = (
         None
         if cursor_output is None
@@ -213,7 +217,6 @@ def run_preview(
         show_camera_image=show_camera_image,
         clock=clock,
         timer=timer,
-        out=out,
     )
     preview = PreviewLoop(
         window,
@@ -237,10 +240,13 @@ def run_preview(
     except KeyboardInterrupt:
         pass
     finally:
-        worker.stop(stop_timeout_s)  # lifts a held button, from here if the worker is stuck
+        # The worker lifts a held button and closes the tracker and the camera on its way
+        # out. If it is stuck, `stop` lifts the button from here, and the tracker and the
+        # camera are left to the worker (if it comes back) or to the process exit, never
+        # closed under a call still running on them.
+        if not worker.stop(stop_timeout_s):
+            print(STUCK_MESSAGE, file=out)
         window.close()
-        tracker.close()
-        camera.release()
         print("camera off", file=out)
     if worker.error is not None:
         raise worker.error
