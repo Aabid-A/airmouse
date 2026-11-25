@@ -194,6 +194,7 @@ def run_preview(
                     camera_image=camera_image,
                     show_camera_image=show_camera_image,
                     debug=debug,
+                    no_hand=controller.no_hand,
                 )
             drawn = timer()
             window.show(image)

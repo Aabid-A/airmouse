@@ -59,6 +59,10 @@ class PinchLatch:
         self._config = config
         self.closed = False
 
+    def reset(self) -> None:
+        """Forget the Pinch: open, as if it had never closed."""
+        self.closed = False
+
     def update(self, ratio: float | None) -> bool:
         if ratio is None:
             return self.closed

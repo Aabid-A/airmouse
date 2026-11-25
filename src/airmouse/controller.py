@@ -11,6 +11,14 @@ when it starts to form, so the click lands where the Pointer was aimed. A Pinch
 released within the click window without the Pointer moving is a click; a Pinch
 held while the Pointer moves is a drag, until the Pinch opens or airmouse pauses.
 A closed Pinch never counts as an Open palm.
+
+When no Hand has been seen for `timing.no_hand_timeout_ms` the controller is in the
+No hand state: the cursor freezes, any Pinch or drag is released (the button goes up
+where the cursor was), and the Pinch is forgotten. airmouse stays unpaused. A shorter
+dropout changes nothing. When the Hand returns the cursor follows the Pointer again
+from its new position (the filter starts afresh, so it does not glide from the old
+spot), but a Hand that returns still pinched must open its Pinch before a click or
+drag can start, so losing the Hand never presses the button.
 """
 
 from dataclasses import dataclass
@@ -107,6 +115,9 @@ class Controller:
         self._palm_since: float | None = None  # start of the current Open palm run
         self._hold_since: float | None = None  # start of the steady hold (Paused)
         self._latched = False  # Open palm ignored until the Hand leaves that pose
+        self._lost_since: float | None = None  # time of the first frame with no Hand
+        self._no_hand = False  # the No hand state has begun (its release was done)
+        self._must_open = False  # after No hand: the Pinch must open before it can click
         self._wrist: tuple[float, float, float] | None = None  # x, y, time
 
     @property
@@ -116,6 +127,13 @@ class Controller:
             return 0.0
         hold = self._timing.unpause_hold_s
         return 1.0 if hold <= 0 else min(1.0, (self._now - self._hold_since) / hold)
+
+    @property
+    def no_hand(self) -> bool:
+        """True once no Hand has been seen for `timing.no_hand_timeout_ms`."""
+        if self._lost_since is None:
+            return False
+        return self._now - self._lost_since >= self._timing.no_hand_timeout_ms / 1000
 
     @property
     def reading(self) -> PalmReading:
@@ -133,6 +151,7 @@ class Controller:
     def update(self, time_s: float, landmarks: Landmarks | None) -> None:
         """Feed one frame. `landmarks` is None when no Hand is seen."""
         self._now = time_s
+        self._track_loss(landmarks)
         self._ratio = None if landmarks is None else pinch_ratio(landmarks)
         self._pinch.update(self._ratio)
         self._measure(landmarks)
@@ -152,6 +171,23 @@ class Controller:
             self._reset_run()
             self.release_drag()
 
+    def _track_loss(self, landmarks: Landmarks | None) -> None:
+        """Time the Hand's absence; on entering No hand, release everything once."""
+        if landmarks is not None:
+            self._lost_since = None
+        elif self._lost_since is None:
+            self._lost_since = self._now
+        if not self.no_hand:
+            self._no_hand = False
+        elif not self._no_hand:
+            self._no_hand = True
+            self.release_drag()
+            self._pinch.reset()
+            self._must_open = True
+            self._frozen = None
+            if self._cursor is not None:
+                self._cursor.reset()
+
     def release_drag(self) -> None:
         """End any Pinch in progress and lift the mouse button, whatever the Hand is doing."""
         self._phase = Phase.IDLE
@@ -161,11 +197,17 @@ class Controller:
         """Move the cursor to the Pointer while active, with Pinch clicks and drags."""
         if self._cursor is None:
             return
-        if self.state is not State.ACTIVE or landmarks is None:
+        if self.state is not State.ACTIVE:
             self._cursor.reset()
             self._frozen = None
             return
+        if landmarks is None:
+            return  # a short dropout (or No hand): nothing moves, nothing is released here
         position = self._cursor.position(self._now, landmarks[POINTER])
+        if self._must_open:
+            if self._pinch.closed:
+                return  # back from No hand still pinched: wait for it to open
+            self._must_open = False
         if self._frozen is None:
             self._frozen = position
         if self._phase is Phase.IDLE:
