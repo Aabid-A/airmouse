@@ -37,18 +37,25 @@ class AbsoluteMapping:
         return (fx * (width - 1), fy * (height - 1))
 
 
+def mapped_region(config: Config, display: tuple[float, float]) -> Region:
+    """The Active region the mapping uses for a display of `display` pixels.
+
+    The Preview outlines this same region, so the outline and the cursor agree.
+    """
+    width, height = prepared_frame_size(
+        config.camera.width, config.camera.height, config.camera.rotate
+    )
+    return active_region(
+        width, height, config.active_region.width_fraction, display[0] / display[1]
+    )
+
+
 def make_mapping(config: Config, display: tuple[float, float]) -> Mapping:
     """The Mapping for `config.control.mode` on a display of `display` pixels."""
     if config.control.mode != "absolute":
         valid = ", ".join(CONTROL_MODES)
         raise ConfigError(f"control.mode: unknown value {config.control.mode!r}; valid: {valid}")
-    width, height = prepared_frame_size(
-        config.camera.width, config.camera.height, config.camera.rotate
-    )
-    region = active_region(
-        width, height, config.active_region.width_fraction, display[0] / display[1]
-    )
-    return AbsoluteMapping(region, display)
+    return AbsoluteMapping(mapped_region(config, display), display)
 
 
 class CursorPath:

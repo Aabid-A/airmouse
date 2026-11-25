@@ -9,9 +9,11 @@ from airmouse.controller import Controller, State
 from airmouse.gestures import Landmarks, Point, is_open_palm
 from airmouse.renderer import (
     BACKGROUND,
-    RING_CENTRE,
     RING_FILLED,
-    RING_INNER,
+    RING_OUTER,
+    RING_RADIUS,
+    RING_TRACK,
+    hold_ring_centre,
     render_preview,
 )
 from anatomy import synthetic_hand
@@ -218,21 +220,28 @@ def test_preview_snapshots(name: str, state: State, progress: float) -> None:
 
 
 def test_the_hold_ring_fills_clockwise_from_the_top() -> None:
-    cx, cy = RING_CENTRE
-    middle = RING_INNER + 5
+    cx, cy = hold_ring_centre()
     image = render_preview(State.PAUSED, 0.5)
 
-    assert image.get(cx, cy - middle) == RING_FILLED  # top
-    assert image.get(cx + middle, cy) == RING_FILLED  # right
-    assert image.get(cx - middle, cy) != RING_FILLED  # left, not yet
-    assert image.get(cx, cy) == BACKGROUND
+    assert image.get(int(cx), int(cy - RING_RADIUS)) == RING_FILLED  # top
+    assert image.get(int(cx + RING_RADIUS), int(cy)) == RING_FILLED  # right
+    assert image.get(int(cx - RING_RADIUS), int(cy)) == RING_TRACK  # left, not yet
+    assert image.get(int(cx), int(cy)) == BACKGROUND
 
 
-def test_the_preview_is_only_background_ring_and_label() -> None:
-    image = render_preview(State.PAUSED, 0.5)
-    colours = {image.get(x, y) for x in range(0, 320, 3) for y in range(240)}
+def test_holding_changes_only_the_hold_ring() -> None:
+    cx, cy = hold_ring_centre()
+    empty, half = render_preview(State.PAUSED, 0.0), render_preview(State.PAUSED, 0.5)
 
-    assert len(colours) <= 4
+    changed = [
+        (x, y)
+        for y in range(empty.height)
+        for x in range(0, empty.width, 2)
+        if empty.get(x, y) != half.get(x, y)
+    ]
+    assert changed
+    reach = RING_OUTER + 10  # the band and its glow
+    assert all(abs(x - cx) <= reach and abs(y - cy) <= reach for x, y in changed)
 
 
 HAND_SIZE = 0.3  # wrist to middle finger base in `real` hands, in frame heights

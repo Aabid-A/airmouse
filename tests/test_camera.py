@@ -7,7 +7,6 @@ import pytest
 
 from airmouse.camera import CameraError, OpenCvCamera, frame_to_image
 from airmouse.config import CameraConfig
-from airmouse.renderer import HEIGHT, WIDTH
 
 cv2: Any = importlib.import_module("cv2")
 
@@ -72,13 +71,15 @@ def test_release_releases_the_capture() -> None:
     assert capture.released
 
 
-def test_a_frame_becomes_a_preview_sized_image() -> None:
-    frame = np.full((480, 640, 3), 200, dtype=np.uint8)
+def test_a_frame_becomes_an_image_of_its_own_size() -> None:
+    frame = np.zeros((640, 480, 3), dtype=np.uint8)  # a prepared frame after a quarter turn
+    frame[5, 7] = (1, 2, 3)
 
     image = frame_to_image(frame)
 
-    assert (image.width, image.height) == (WIDTH, HEIGHT)
-    assert image.get(10, 10) == (200, 200, 200)
+    assert (image.width, image.height) == (480, 640)
+    assert image.get(7, 5) == (1, 2, 3)
+    assert image.get(10, 10) == (0, 0, 0)
 
 
 class FakeVideoCapture(FakeCapture):

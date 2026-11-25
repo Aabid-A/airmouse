@@ -136,6 +136,11 @@ class Controller:
         return self._now - self._lost_since >= self._timing.no_hand_timeout_ms / 1000
 
     @property
+    def phase(self) -> Phase:
+        """Where the Pinch is (read-only, for the Preview): idle, pressed or dragging."""
+        return self._phase
+
+    @property
     def reading(self) -> PalmReading:
         """The latest frame's Open palm score and wrist speed against their limits."""
         score, speed = self._score, self._speed

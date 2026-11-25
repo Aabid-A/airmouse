@@ -14,7 +14,7 @@ from typing import Any, Protocol
 
 from airmouse.config import CameraConfig
 from airmouse.frame import Frame
-from airmouse.renderer import HEIGHT, WIDTH, Image
+from airmouse.renderer import Image
 
 CAMERA_SETTINGS_PATH = "System Settings > Privacy & Security > Camera"
 SETTLE_READS = 3  # the first frames of some cameras are dark while exposure settles
@@ -70,7 +70,9 @@ class OpenCvCamera:
 
 
 def frame_to_image(frame: Frame) -> Image:
-    """A frame shrunk to the Preview's size. Used only for the opt-in camera image."""
-    cv2: Any = importlib.import_module("cv2")
-    small = cv2.resize(frame, (WIDTH, HEIGHT), interpolation=cv2.INTER_AREA)
-    return Image(WIDTH, HEIGHT, bytearray(small.tobytes()))
+    """A prepared frame as an Image at its own size. Used only for the opt-in camera image.
+
+    The renderer fits it into the Preview without stretching it.
+    """
+    height, width = frame.shape[:2]
+    return Image(width, height, bytearray(frame.tobytes()))

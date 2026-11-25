@@ -204,8 +204,7 @@ def lost_script(frame: int) -> Any:
 
 
 def label_rows(image: Image) -> bytes:
-    stride = WIDTH * 3
-    return bytes(image.pixels[LABEL_TOP * stride : (LABEL_TOP + 14) * stride])
+    return bytes(image.pixels[LABEL_TOP * WIDTH * 3 :])
 
 
 def test_the_app_releases_a_lost_drag_and_the_preview_says_no_hand() -> None:
@@ -230,3 +229,40 @@ def test_the_app_releases_a_lost_drag_and_the_preview_says_no_hand() -> None:
     assert output.kinds().count("release_drag") == 2  # No hand, then the exit
     assert output.kinds().index("release_drag") < 80  # released well before the app quit
     assert not output.down
+
+
+def test_the_controller_phase_reads_pressed_then_dragging_then_idle_on_no_hand() -> None:
+    rig = Rig()
+    rig.aim()
+    assert rig.controller.phase is Phase.IDLE
+    rig.feed(0.1, hand(CLOSED))
+    assert rig.controller.phase is Phase.PRESSED
+    rig.drag_sideways()
+    assert rig.controller.phase is Phase.DRAGGING
+
+    rig.feed(TIMEOUT_S + 0.1, None)
+
+    assert rig.controller.phase is Phase.IDLE
+
+
+def test_the_preview_says_pinch_then_drag_as_the_controller_presses_and_drags() -> None:
+    window = RecordingWindow(frames=80)
+
+    run_preview(
+        Config(),
+        Camera(),
+        Script(lost_script),
+        window,
+        output=RecordingOutput(),
+        display=(1600.0, 1000.0),
+        clock=Clock(),
+        timer=Clock(),
+        out=io.StringIO(),
+    )
+
+    def label(phase: Phase) -> bytes:
+        return label_rows(render_preview(State.ACTIVE, phase=phase))
+
+    assert label_rows(window.images[33]) == label(Phase.IDLE)  # aiming
+    assert label_rows(window.images[38]) == label(Phase.PRESSED)  # the Pinch closed
+    assert label_rows(window.images[46]) == label(Phase.DRAGGING)  # moving while pinched
