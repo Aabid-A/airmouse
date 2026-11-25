@@ -1,8 +1,11 @@
+import threading
+from collections.abc import Iterator
 from typing import NoReturn
 
 import pytest
 
 from airmouse.config import Config
+from airmouse.pipeline import WORKER_NAME
 
 
 class GrantedProbe:
@@ -32,6 +35,17 @@ def no_live_preview(monkeypatch: pytest.MonkeyPatch) -> None:
         pytest.fail("a test reached the real camera; pass a fake `preview` to main()")
 
     monkeypatch.setattr("airmouse.cli.run_live_preview", fail)
+
+
+@pytest.fixture(autouse=True)
+def no_leftover_worker() -> Iterator[None]:
+    """Every test that starts the worker thread must see it end: none is left running."""
+    yield
+    for thread in threading.enumerate():
+        if thread.name == WORKER_NAME:
+            thread.join(5.0)
+            if thread.is_alive():
+                pytest.fail("a test left the worker thread running")
 
 
 class FakePreview:

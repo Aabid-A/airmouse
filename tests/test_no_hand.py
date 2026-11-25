@@ -10,6 +10,7 @@ from airmouse.controller import Phase, State
 from airmouse.renderer import LABEL_TOP, WIDTH, Image, render_preview
 from anatomy import synthetic_hand
 from hands import open_hand
+from lockstep import lockstep
 from test_pinch import AIM, CLOSED, OPEN, Camera, Clock, RecordingOutput, Rig, Script, hand
 
 TIMEOUT_S = Config().timing.no_hand_timeout_ms / 1000
@@ -211,11 +212,12 @@ def test_the_app_releases_a_lost_drag_and_the_preview_says_no_hand() -> None:
     output = RecordingOutput()
     window = RecordingWindow(frames=80)
 
+    camera, stepped_window = lockstep(Camera(), window)
     run_preview(
         Config(),
-        Camera(),
+        camera,
         Script(lost_script),
-        window,
+        stepped_window,
         output=output,
         display=(1600.0, 1000.0),
         clock=Clock(),
@@ -248,11 +250,12 @@ def test_the_controller_phase_reads_pressed_then_dragging_then_idle_on_no_hand()
 def test_the_preview_says_pinch_then_drag_as_the_controller_presses_and_drags() -> None:
     window = RecordingWindow(frames=80)
 
+    camera, stepped_window = lockstep(Camera(), window)
     run_preview(
         Config(),
-        Camera(),
+        camera,
         Script(lost_script),
-        window,
+        stepped_window,
         output=RecordingOutput(),
         display=(1600.0, 1000.0),
         clock=Clock(),

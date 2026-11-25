@@ -180,7 +180,8 @@ DEFAULT_VIEW = FrameView()
 
 @dataclass(frozen=True)
 class DebugReadout:
-    """What `--debug-gestures` draws: the palm reading and per-stage timings (name, ms)."""
+    """What `--debug-gestures` draws: the palm reading, then rows of (name, value) on the right:
+    stage timings in ms and, last, the tracking and window rates in frames per second."""
 
     palm: PalmReading
     timings: tuple[tuple[str, float], ...] = ()

@@ -1,5 +1,6 @@
 import dataclasses
 import io
+import threading
 from collections.abc import Callable
 from types import SimpleNamespace
 from typing import Any
@@ -15,6 +16,7 @@ from airmouse.mapping import make_cursor_path
 from airmouse.output import OutputError, QuartzOutput
 from anatomy import synthetic_hand
 from hands import open_hand, pinched, placed, pointing_hand
+from lockstep import WAIT_S, lockstep
 
 FRAME_S = 1 / 30
 DISPLAY = (1600.0, 1000.0)
@@ -387,11 +389,12 @@ def run_app(
     calibrate: bool = False,
     out: io.StringIO | None = None,
 ) -> int:
+    camera, stepped_window = lockstep(Camera(), window)
     return run_preview(
         Config(),
-        Camera(),
+        camera,
         Script(script),
-        window,
+        stepped_window,
         calibrate=calibrate,
         output=output,
         display=DISPLAY,
@@ -543,3 +546,38 @@ def test_a_refused_button_down_leaves_nothing_to_release() -> None:
     output.release_drag()
 
     assert quartz.posted == []
+
+
+class SlowPressQuartz(FakeQuartz):
+    """Holds a button-down event in CGEventPost until told to go on."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.posting_down = threading.Event()
+        self.go = threading.Event()
+
+    def CGEventPost(self, tap: int, event: Any) -> None:
+        if event[0] == self.kCGEventLeftMouseDown:
+            self.posting_down.set()
+            assert self.go.wait(WAIT_S)
+        super().CGEventPost(tap, event)
+
+
+def test_release_drag_from_another_thread_waits_for_a_press_in_progress() -> None:
+    # The worker posts a press; the main thread lifts the button on the way out.
+    quartz = SlowPressQuartz()
+    output = QuartzOutput(quartz)
+    presser = threading.Thread(target=output.press, args=(10, 20))
+    presser.start()
+    assert quartz.posting_down.wait(WAIT_S)
+
+    releaser = threading.Thread(target=output.release_drag)
+    releaser.start()
+    releaser.join(0.05)
+    assert releaser.is_alive()  # it waits for the press instead of missing it
+
+    quartz.go.set()
+    presser.join(WAIT_S)
+    releaser.join(WAIT_S)
+    assert not presser.is_alive() and not releaser.is_alive()
+    assert [kind for kind, _ in quartz.posted] == [1, 2]  # down, then up: never left down
