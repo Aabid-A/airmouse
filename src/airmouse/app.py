@@ -41,6 +41,15 @@ class NoOutput:
     def move_cursor(self, x: float, y: float) -> None:
         pass
 
+    def press(self, x: float, y: float) -> None:
+        pass
+
+    def drag_to(self, x: float, y: float) -> None:
+        pass
+
+    def release(self, x: float, y: float) -> None:
+        pass
+
     def release_drag(self) -> None:
         pass
 
@@ -91,6 +100,14 @@ def camera_on_line(camera: CameraConfig) -> str:
     )
 
 
+def _release_drag(controller: Controller, out: TextIO) -> None:
+    """On the way out, never leave the mouse button down. Says so if it cannot be lifted."""
+    try:
+        controller.release_drag()
+    except OutputError as error:
+        print(f"airmouse: could not release the mouse button: {error}", file=out)
+
+
 def run_preview(
     config: Config,
     camera: Camera,
@@ -108,7 +125,7 @@ def run_preview(
 ) -> int:
     """Run until `q` or Ctrl-C, then release everything. Raises CameraError if frames stop.
 
-    `output` receives cursor moves (default: none) and `display` is its size in pixels.
+    `output` takes cursor moves, clicks and drags (default: none); `display` is its size in pixels.
     `debug_gestures` draws the gesture readout and stage timings (`timer` measures them).
     """
     controller = (
@@ -119,6 +136,7 @@ def run_preview(
             output or NoOutput(),
             make_cursor_path(config, display),
             config.open_palm,
+            config.pinch,
         )
     )
     meter = FpsMeter()
@@ -192,6 +210,8 @@ def run_preview(
     except KeyboardInterrupt:
         pass
     finally:
+        if controller is not None:
+            _release_drag(controller, out)
         window.close()
         tracker.close()
         camera.release()

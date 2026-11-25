@@ -3,7 +3,8 @@
 Quartz comes from `pyobjc-framework-Quartz`, a darwin-only dependency, so it is
 imported lazily and only by `QuartzOutput.open()`. The class itself takes the
 Quartz module as an argument, so tests drive it with a fake on any platform.
-Only moves exist so far; click, drag and scroll come with later issues.
+Moves, left mouse down, up and dragged exist; scroll comes with a later issue.
+`release_drag` lifts the button if it is down, and is safe to call at any time.
 """
 
 import importlib
@@ -18,6 +19,8 @@ class OutputError(Exception):
 class QuartzOutput:
     def __init__(self, quartz: Any) -> None:
         self._quartz = quartz
+        self._down = False  # the left button is down
+        self._last = (0.0, 0.0)  # where the last event went, in display pixels
         bounds = quartz.CGDisplayBounds(quartz.CGMainDisplayID())
         self._origin = (float(bounds.origin.x), float(bounds.origin.y))
         self.display_size = (float(bounds.size.width), float(bounds.size.height))
@@ -35,17 +38,35 @@ class QuartzOutput:
 
     def move_cursor(self, x: float, y: float) -> None:
         """Move the cursor to (x, y) in main-display pixels, origin top left (as CGEvent uses)."""
+        self._post(self._quartz.kCGEventMouseMoved, x, y)
+
+    def press(self, x: float, y: float) -> None:
+        """Left mouse button down at (x, y). It stays down until `release` or `release_drag`."""
+        self._post(self._quartz.kCGEventLeftMouseDown, x, y)
+        self._down = True
+
+    def drag_to(self, x: float, y: float) -> None:
+        """Move the cursor with the left button held (a dragged event, not a plain move)."""
+        self._post(self._quartz.kCGEventLeftMouseDragged, x, y)
+
+    def release(self, x: float, y: float) -> None:
+        """Left mouse button up at (x, y)."""
+        self._down = False
+        self._post(self._quartz.kCGEventLeftMouseUp, x, y)
+
+    def release_drag(self) -> None:
+        """Lift the button if it is down, where the cursor last was. Does nothing otherwise."""
+        if self._down:
+            self.release(*self._last)
+
+    def _post(self, kind: int, x: float, y: float) -> None:
         quartz = self._quartz
+        self._last = (x, y)
         point = (self._origin[0] + x, self._origin[1] + y)
-        event = quartz.CGEventCreateMouseEvent(
-            None, quartz.kCGEventMouseMoved, point, quartz.kCGMouseButtonLeft
-        )
+        event = quartz.CGEventCreateMouseEvent(None, kind, point, quartz.kCGMouseButtonLeft)
         if event is None:
             raise OutputError(
                 "macOS refused to create a mouse event. Check the Accessibility permission "
                 "for your terminal app in System Settings > Privacy & Security."
             )
         quartz.CGEventPost(quartz.kCGHIDEventTap, event)
-
-    def release_drag(self) -> None:
-        pass  # no drag exists yet (a later issue)

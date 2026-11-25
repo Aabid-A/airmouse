@@ -5,27 +5,40 @@ to the Pointer (through the Active region and the One Euro filter). A held Open
 palm unpauses (the Hold ring fills while it is held steady); an Open palm pauses
 after a short debounce and releases any drag. After a held palm unpauses, the Open palm is ignored
 until the Hand has left that pose, so the same palm cannot pause again at once.
+
+While active, a Pinch (thumb tip to index tip, in hand sizes) freezes the cursor from
+when it starts to form, so the click lands where the Pointer was aimed. A Pinch
+released within the click window without the Pointer moving is a click; a Pinch
+held while the Pointer moves is a drag, until the Pinch opens or airmouse pauses.
+A closed Pinch never counts as an Open palm.
 """
 
 from dataclasses import dataclass
 from enum import Enum
 from typing import Protocol
 
-from airmouse.config import OpenPalmConfig, TimingConfig
+from airmouse.config import OpenPalmConfig, PinchConfig, TimingConfig
 from airmouse.gestures import (
     LANDMARK_COUNT,
     POINTER,
     WRIST,
     Landmarks,
+    PinchLatch,
+    Point,
     distance,
     hand_size,
     open_palm_score,
+    pinch_ratio,
 )
 from airmouse.mapping import CursorPath
 
 # The wrist speed is smoothed over a few frames (weight of the newest frame), so
 # one frame of landmark jitter cannot restart the Hold ring.
 SPEED_SMOOTHING = 0.3
+
+# A Pinch that has not moved the Pointer further than this (in hand sizes, from where
+# the Pinch closed) is still a click; further and it is a drag.
+CLICK_TOLERANCE = 0.15
 
 
 @dataclass(frozen=True)
@@ -45,10 +58,24 @@ class State(Enum):
     ACTIVE = "active"
 
 
+class Phase(Enum):
+    """Where a Pinch is: not pinching, closed and undecided, or dragging."""
+
+    IDLE = "idle"
+    PRESSED = "pressed"
+    DRAGGING = "dragging"
+
+
 class Output(Protocol):
     """What the controller can ask the outside world to do."""
 
     def move_cursor(self, x: float, y: float) -> None: ...
+
+    def press(self, x: float, y: float) -> None: ...
+
+    def drag_to(self, x: float, y: float) -> None: ...
+
+    def release(self, x: float, y: float) -> None: ...
 
     def release_drag(self) -> None: ...
 
@@ -60,8 +87,16 @@ class Controller:
         output: Output,
         cursor: CursorPath | None = None,
         open_palm: OpenPalmConfig | None = None,
+        pinch: PinchConfig | None = None,
     ) -> None:
         self._timing = timing
+        self._pinch_config = pinch or PinchConfig()
+        self._pinch = PinchLatch(self._pinch_config)
+        self._ratio: float | None = None
+        self._phase = Phase.IDLE
+        self._frozen: Point | None = None  # where the cursor last was (and stays while pinching)
+        self._pressed_at = 0.0
+        self._pressed_pointer: Point = (0.0, 0.0)
         self._palm = open_palm or OpenPalmConfig()
         self._score: float | None = None
         self._speed: float | None = None
@@ -98,6 +133,8 @@ class Controller:
     def update(self, time_s: float, landmarks: Landmarks | None) -> None:
         """Feed one frame. `landmarks` is None when no Hand is seen."""
         self._now = time_s
+        self._ratio = None if landmarks is None else pinch_ratio(landmarks)
+        self._pinch.update(self._ratio)
         self._measure(landmarks)
         if not self.reading.counts:
             self._latched = False
@@ -113,16 +150,65 @@ class Controller:
         elif time_s - self._palm_since >= self._timing.pause_debounce_ms / 1000:
             self.state = State.PAUSED
             self._reset_run()
-            self._output.release_drag()
+            self.release_drag()
+
+    def release_drag(self) -> None:
+        """End any Pinch in progress and lift the mouse button, whatever the Hand is doing."""
+        self._phase = Phase.IDLE
+        self._output.release_drag()
 
     def _follow(self, landmarks: Landmarks | None) -> None:
-        """Move the cursor to the Pointer while active. Otherwise leave the cursor alone."""
+        """Move the cursor to the Pointer while active, with Pinch clicks and drags."""
         if self._cursor is None:
             return
         if self.state is not State.ACTIVE or landmarks is None:
             self._cursor.reset()
+            self._frozen = None
             return
-        self._output.move_cursor(*self._cursor.position(self._now, landmarks[POINTER]))
+        position = self._cursor.position(self._now, landmarks[POINTER])
+        if self._frozen is None:
+            self._frozen = position
+        if self._phase is Phase.IDLE:
+            self._aim(position, landmarks)
+        elif self._phase is Phase.PRESSED:
+            self._decide(position, landmarks)
+        else:
+            self._drag(position)
+
+    def _aim(self, position: Point, landmarks: Landmarks) -> None:
+        """No Pinch yet: follow the Pointer, but freeze once a Pinch starts to form."""
+        if self._pinch.closed:
+            self._phase = Phase.PRESSED
+            self._pressed_at = self._now
+            self._pressed_pointer = landmarks[POINTER]
+        elif self._ratio is None or self._ratio >= self._pinch_config.open_threshold:
+            self._frozen = position
+            self._output.move_cursor(*position)
+
+    def _decide(self, position: Point, landmarks: Landmarks) -> None:
+        """A closed Pinch: released in time without moving is a click; moving makes it a drag."""
+        frozen = self._frozen or position
+        if not self._pinch.closed:
+            self._phase = Phase.IDLE
+            if self._now - self._pressed_at <= self._pinch_config.click_window_ms / 1000:
+                self._output.press(*frozen)
+                self._output.release(*frozen)
+            return
+        size = hand_size(landmarks)
+        moved = distance(landmarks[POINTER], self._pressed_pointer)
+        if size > 0 and moved > CLICK_TOLERANCE * size:
+            self._phase = Phase.DRAGGING
+            self._output.press(*frozen)
+            self._frozen = position
+            self._output.drag_to(*position)
+
+    def _drag(self, position: Point) -> None:
+        if self._pinch.closed:
+            self._frozen = position
+            self._output.drag_to(*position)
+        else:
+            self._phase = Phase.IDLE
+            self._output.release(*(self._frozen or position))
 
     def _reset_run(self) -> None:
         self._palm_since = None
@@ -139,6 +225,8 @@ class Controller:
     def _measure(self, landmarks: Landmarks | None) -> None:
         """Score the Open palm and the smoothed wrist speed for this frame."""
         self._score = None if landmarks is None else open_palm_score(landmarks, self._palm)
+        if self._pinch.closed and self._score is not None:
+            self._score = 0.0  # a closed Pinch never counts as an Open palm
         if landmarks is None or len(landmarks) != LANDMARK_COUNT or hand_size(landmarks) <= 0:
             self._speed = None
             self._wrist = None
