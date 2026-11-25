@@ -98,6 +98,7 @@ FONT: dict[str, tuple[str, ...]] = {
     "D": ("####.", "#...#", "#...#", "#...#", "#...#", "#...#", "####."),
     "E": ("#####", "#....", "#....", "####.", "#....", "#....", "#####"),
     "F": ("#####", "#....", "#....", "####.", "#....", "#....", "#...."),
+    "H": ("#...#", "#...#", "#...#", "#####", "#...#", "#...#", "#...#"),
     "I": ("#####", "..#..", "..#..", "..#..", "..#..", "..#..", "#####"),
     "L": ("#....", "#....", "#....", "#....", "#....", "#....", "#####"),
     "M": ("#...#", "##.##", "#.#.#", "#.#.#", "#...#", "#...#", "#...#"),
@@ -194,6 +195,7 @@ def render_preview(
     camera_image: Image | None = None,
     show_camera_image: bool = False,
     debug: DebugReadout | None = None,
+    no_hand: bool = False,
 ) -> Image:
     """The Preview for a state.
 
@@ -202,11 +204,14 @@ def render_preview(
     indicator appears when `camera_on`, and the FPS readout when `fps` is given.
     `camera_image` is drawn behind everything only when `show_camera_image` is
     True: the default Privacy preview ignores it. `debug` adds the gesture readout.
+    `no_hand` (the No hand state) replaces the ACTIVE label with NO HAND.
     """
     image = _background(camera_image, show_camera_image)
     if state is State.PAUSED:
         _draw_hold_ring(image, hold_progress)
         _draw_label(image, "PAUSED", TEXT_PAUSED)
+    elif no_hand:
+        _draw_label(image, "NO HAND", TEXT_PAUSED)
     else:
         _draw_label(image, "ACTIVE", TEXT_ACTIVE)
     if landmarks is not None:

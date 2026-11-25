@@ -12,6 +12,7 @@ from airmouse.renderer import (
     CAMERA_ON_DOT,
     HEIGHT,
     JOINT,
+    LABEL_TOP,
     PALETTE,
     POINTER_COLOUR,
     POINTER_INDEX,
@@ -110,6 +111,7 @@ def snapshot_cases() -> dict[str, Image]:
             State.ACTIVE, landmarks=placed(pointing_hand(), dy=-0.08), camera_on=True, fps=29.6
         ),
         "no_hand": render_preview(State.PAUSED, camera_on=True, fps=30.0),
+        "no_hand_active": render_preview(State.ACTIVE, camera_on=True, fps=30.0, no_hand=True),
     }
 
 
@@ -133,7 +135,8 @@ def top_right_corner(image: Image) -> bytes:
 
 
 @pytest.mark.parametrize(
-    "name", ["hand_paused", "hand_active", "no_hand", *calibrate_cases(), *debug_cases()]
+    "name",
+    ["hand_paused", "hand_active", "no_hand", "no_hand_active", *calibrate_cases(), *debug_cases()],
 )
 def test_preview_snapshots_match_pixel_for_pixel(name: str) -> None:
     expected = decode_png((SNAPSHOTS / f"{name}.png").read_bytes())
@@ -421,3 +424,22 @@ def test_every_timing_row_is_drawn_on_the_right_below_the_fps() -> None:
     rows = changed_rows(range(236, WIDTH - 5))
     assert min(rows) >= 34  # below the FPS readout
     assert len({y for y in rows if (y - 34) % 10 == 0}) == len(TIMINGS)
+
+
+def test_the_no_hand_state_says_so_and_only_the_label_differs_from_active() -> None:
+    active = render_preview(State.ACTIVE, camera_on=True, fps=30.0)
+    lost = render_preview(State.ACTIVE, camera_on=True, fps=30.0, no_hand=True)
+
+    assert lost.pixels != active.pixels
+    top = LABEL_TOP * WIDTH * 3
+    assert lost.pixels[:top] == active.pixels[:top]  # everything above the label is the same
+
+
+def test_no_hand_while_paused_keeps_the_paused_label() -> None:
+    paused = render_preview(State.PAUSED, 0.3)
+
+    assert render_preview(State.PAUSED, 0.3, no_hand=True).pixels == paused.pixels
+
+
+def test_the_no_hand_preview_uses_only_palette_colours() -> None:
+    assert colours_in(snapshot_cases()["no_hand_active"]) <= PALETTE
