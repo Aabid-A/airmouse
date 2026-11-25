@@ -24,6 +24,15 @@ class FakeOutput:
     def move_cursor(self, x: float, y: float) -> None:
         self.moves.append((x, y))
 
+    def press(self, x: float, y: float) -> None:
+        pass
+
+    def drag_to(self, x: float, y: float) -> None:
+        pass
+
+    def release(self, x: float, y: float) -> None:
+        pass
+
     def release_drag(self) -> None:
         pass
 

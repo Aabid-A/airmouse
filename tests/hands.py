@@ -1,5 +1,7 @@
 """Synthetic Hands for tests: 21 normalised landmarks, never recorded from a camera."""
 
+import math
+
 from airmouse.gestures import Landmarks, Point
 
 # Index 0 is the wrist, then thumb (1-4), index (5-8), middle (9-12), ring (13-16), little (17-20).
@@ -34,3 +36,11 @@ def placed(hand: Landmarks, *, dx: float = 0.0, dy: float = 0.0, scale: float = 
     """The Hand scaled about its wrist (a larger scale looks nearer), then shifted."""
     wx, wy = hand[0]
     return [(wx + (x - wx) * scale + dx, wy + (y - wy) * scale + dy) for x, y in hand]
+
+
+def pinched(hand: Landmarks, ratio: float) -> Landmarks:
+    """The Hand with its thumb tip `ratio` hand sizes to the left of the index tip."""
+    size = math.hypot(hand[0][0] - hand[9][0], hand[0][1] - hand[9][1])
+    result = list(hand)
+    result[4] = (hand[8][0] - ratio * size, hand[8][1])
+    return result

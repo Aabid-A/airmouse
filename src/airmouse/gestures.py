@@ -7,7 +7,7 @@ the fingertips and 5/9/13/17 the finger base (MCP) joints.
 import math
 from collections.abc import Sequence
 
-from airmouse.config import OpenPalmConfig
+from airmouse.config import OpenPalmConfig, PinchConfig
 
 type Point = tuple[float, float]
 type Landmarks = Sequence[Point]
@@ -36,6 +36,37 @@ def distance(a: Point, b: Point) -> float:
 def hand_size(landmarks: Landmarks) -> float:
     """Wrist to the middle finger's base: the unit all gesture thresholds use."""
     return distance(landmarks[WRIST], landmarks[MIDDLE_MCP])
+
+
+def pinch_ratio(landmarks: Landmarks) -> float | None:
+    """Thumb tip to index tip, in hand sizes. None when the Hand cannot be measured."""
+    if len(landmarks) != LANDMARK_COUNT:
+        return None
+    size = hand_size(landmarks)
+    if size <= 0:
+        return None
+    return distance(landmarks[THUMB_TIP], landmarks[INDEX_TIP]) / size
+
+
+class PinchLatch:
+    """Closed below the close threshold and open above the open threshold.
+
+    Between the two it keeps its last answer, so a ratio hovering near one
+    threshold cannot flicker the Pinch on and off.
+    """
+
+    def __init__(self, config: PinchConfig) -> None:
+        self._config = config
+        self.closed = False
+
+    def update(self, ratio: float | None) -> bool:
+        if ratio is None:
+            return self.closed
+        if ratio < self._config.close_threshold:
+            self.closed = True
+        elif ratio > self._config.open_threshold:
+            self.closed = False
+        return self.closed
 
 
 def _ramp(value: float, low: float, high: float) -> float:
