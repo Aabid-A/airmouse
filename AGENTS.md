@@ -86,6 +86,20 @@ When a task went badly, or every few PRs, run `/retro` to improve the setup.
   force-push. If the check is wrong, fix the check.
 - Review runs on two axes (standards and spec) in `/review-loop`.
 
+## Merge policy
+
+Agents never merge by hand. When a PR is **safe**, the agent turns on GitHub
+auto-merge (`gh pr merge <n> --auto --squash`) and GitHub merges it once the
+ruleset is satisfied. Safe means all of:
+- `/review-loop` passed, with no open bug findings;
+- the PR's merge danger is a two-way door;
+- the issue is not labelled `human-verified`;
+- the diff touches no path listed in `.github/CODEOWNERS`.
+
+Anything else is **parked**: label the issue `parked`, say why in a PR comment,
+and leave the merge to the user. If "Auto-merge" in Conventions is `off`, park
+every PR.
+
 ## Merging
 
 An agent may merge its own PR (squash, pinned to the reviewed head commit) once
@@ -169,6 +183,7 @@ and ask before it removes comments or tests.
 <!-- Fill in per project: language/runtime, architecture, anything unusual. -->
 - Branch prefix: `agent/`
 - Review gate: A (two-axis review). See `skills/review-loop/SKILL.md`.
+- Auto-merge: on   <!-- on | off; see Merge policy -->
 - Style mode: <!-- the project's visual style, if it has a UI -->
 - Main references: <!-- sites or screenshots to match, if any -->
 
