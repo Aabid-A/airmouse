@@ -4,6 +4,9 @@ Quartz comes from `pyobjc-framework-Quartz`, a darwin-only dependency, so it is
 imported lazily and only by `QuartzOutput.open()`. The class itself takes the
 Quartz module as an argument, so tests drive it with a fake on any platform.
 Moves, left mouse down, up and dragged exist; scroll comes with a later issue.
+It also reads the active displays and the cursor's current position, for relative
+control mode. Every coordinate is a Quartz global coordinate in points (the main
+display's top left is the origin), so Retina displays need no special handling.
 `release_drag` lifts the button if it is down, and is safe to call at any time and
 from any thread: the worker thread posts every event, and the main thread calls
 `release_drag` only on the way out when the worker is stuck. A lock around the
@@ -14,6 +17,11 @@ import importlib
 import sys
 import threading
 from typing import Any
+
+from airmouse.displays import Display
+from airmouse.gestures import Point
+
+MAX_DISPLAYS = 32  # how many active displays are read at most
 
 
 class OutputError(Exception):
@@ -41,8 +49,32 @@ class QuartzOutput:
         except ImportError as error:
             raise OutputError(f"the Quartz bindings are not available: {error}") from error
 
+    def displays(self) -> tuple[Display, ...]:
+        """The active displays' bounds in global points. Empty if Quartz cannot list them."""
+        quartz = self._quartz
+        error, ids, count = quartz.CGGetActiveDisplayList(MAX_DISPLAYS, None, None)
+        if error or not ids:
+            return ()
+        found: list[Display] = []
+        for display_id in list(ids)[:count]:
+            bounds = quartz.CGDisplayBounds(display_id)
+            width, height = float(bounds.size.width), float(bounds.size.height)
+            if width >= 1 and height >= 1:
+                found.append(Display(float(bounds.origin.x), float(bounds.origin.y), width, height))
+        return tuple(found)
+
+    def cursor_position(self) -> Point | None:
+        """Where the cursor is now, in global points, or None if Quartz cannot say."""
+        quartz = self._quartz
+        event = quartz.CGEventCreate(None)
+        if event is None:
+            return None
+        location = quartz.CGEventGetLocation(event)
+        return (float(location.x), float(location.y))
+
     def move_cursor(self, x: float, y: float) -> None:
-        """Move the cursor to (x, y) in main-display pixels, origin top left (as CGEvent uses)."""
+        """Move the cursor to (x, y) in global points from the main display's top left
+        (as CGEvent uses), which is also main-display pixels for absolute mode."""
         with self._lock:
             self._post(self._quartz.kCGEventMouseMoved, x, y)
 

@@ -14,7 +14,7 @@ from typing import Any, cast
 
 DEFAULT_CONFIG_PATH = Path("~/.config/airmouse/config.toml")
 
-CONTROL_MODES = ("absolute",)
+CONTROL_MODES = ("relative", "absolute")
 ROTATIONS = (0, 90, 180, 270)
 
 
@@ -58,7 +58,44 @@ class ActiveRegionConfig:
 
 @dataclass(frozen=True)
 class ControlConfig:
-    mode: str = _bounded("absolute", choices=CONTROL_MODES)
+    """`relative` (the default) moves the cursor by the Pointer's movement, across all
+    displays; `absolute` maps the Active region to the main display (ADR 0002)."""
+
+    mode: str = _bounded("relative", choices=CONTROL_MODES)
+
+
+@dataclass(frozen=True)
+class RelativeConfig:
+    """Relative control mode: how far the cursor moves for a Pointer movement.
+
+    `gain` is display points per hand size of Pointer movement, so the feel is the
+    same near or far from the camera. `acceleration` adds gain as the Pointer speeds
+    up: the gain is `gain * (1 + acceleration * speed)`, speed in hand sizes per
+    second, so 0 means none. `max_gain` caps the gain however fast the hand moves.
+    """
+
+    gain: float = _bounded(800.0, low=1.0, high=20000.0)
+    acceleration: float = _bounded(0.5, low=0.0, high=10.0)
+    max_gain: float = _bounded(3000.0, low=1.0, high=50000.0)
+
+
+@dataclass(frozen=True)
+class ClutchConfig:
+    """The Fist clutch: a closed fist held for `debounce_ms` stops the cursor following.
+
+    Each of the four fingers (index included) is measured as wrist-to-tip over
+    wrist-to-base distance: `finger_curled` or less counts as fully curled (1) and
+    `finger_open` or more as open (0), a straight line between. The Fist score is the
+    least curled finger, so one finger out (the Pointer pose) scores 0. The clutch
+    counts at `score_threshold` or more. A thumb tip closer than `pinch_gap` hand
+    sizes to the index tip is a Pinch, never a Fist.
+    """
+
+    score_threshold: float = _bounded(0.6, low=0.0, high=1.0)
+    finger_curled: float = _bounded(1.0, low=0.0, high=3.0)
+    finger_open: float = _bounded(1.4, low=0.0, high=3.0)
+    pinch_gap: float = _bounded(0.3, low=0.0, high=2.0)
+    debounce_ms: float = _bounded(100.0, low=0.0, high=2000.0)
 
 
 @dataclass(frozen=True)
@@ -114,6 +151,8 @@ class Config:
     pinch: PinchConfig = PinchConfig()
     timing: TimingConfig = TimingConfig()
     open_palm: OpenPalmConfig = OpenPalmConfig()
+    relative: RelativeConfig = RelativeConfig()
+    clutch: ClutchConfig = ClutchConfig()
 
 
 def _check_value(key: str, spec: dataclasses.Field[Any], value: Any) -> Any:
@@ -170,6 +209,10 @@ def _build(raw: Mapping[str, Any]) -> Config:
         raise ConfigError("open_palm.finger_curled: must be below open_palm.finger_extended")
     if palm.thumb_weight + palm.spread_weight >= 1:
         raise ConfigError("open_palm.thumb_weight: with open_palm.spread_weight must total below 1")
+    if config.relative.max_gain < config.relative.gain:
+        raise ConfigError("relative.max_gain: must be at least relative.gain")
+    if config.clutch.finger_curled >= config.clutch.finger_open:
+        raise ConfigError("clutch.finger_curled: must be below clutch.finger_open")
     return config
 
 

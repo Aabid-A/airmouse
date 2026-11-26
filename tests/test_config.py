@@ -5,6 +5,7 @@ import pytest
 from airmouse.cli import main
 from airmouse.config import Config, ConfigError, format_config, load_config
 from airmouse.permissions import PermissionProbe
+from conftest import FakePreview
 
 
 @pytest.fixture(autouse=True)
@@ -24,7 +25,10 @@ def test_defaults_match_the_spec() -> None:
     assert config == Config()
     assert (config.camera.index, config.camera.rotate, config.camera.mirror) == (0, 0, True)
     assert config.active_region.width_fraction == 0.6
-    assert config.control.mode == "absolute"
+    assert config.control.mode == "relative"
+    assert (config.relative.gain, config.relative.acceleration) == (800, 0.5)
+    assert config.relative.max_gain == 3000
+    assert (config.clutch.score_threshold, config.clutch.debounce_ms) == (0.6, 100)
     assert (config.pinch.close_threshold, config.pinch.open_threshold) == (0.25, 0.40)
     assert config.pinch.click_window_ms == 300
     assert config.timing.unpause_hold_s == 0.8
@@ -73,6 +77,11 @@ def test_720p_is_a_config_option(tmp_path: Path) -> None:
         ("filter", "beta", "-inf"),
         ("open_palm", "score_threshold", "nan"),
         ("open_palm", "steady_max_speed", "inf"),
+        ("relative", "gain", "nan"),
+        ("relative", "acceleration", "inf"),
+        ("relative", "max_gain", "inf"),
+        ("clutch", "score_threshold", "nan"),
+        ("clutch", "debounce_ms", "inf"),
     ],
 )
 def test_non_finite_numbers_are_rejected(
@@ -118,7 +127,7 @@ def test_print_config_lists_every_effective_value(
         "rotate = 0",
         "mirror = true",
         "width_fraction = 0.6",
-        'mode = "absolute"',
+        'mode = "relative"',
         "min_cutoff = 1.0",
         "beta = 0.007",
         "close_threshold = 0.25",
@@ -134,6 +143,14 @@ def test_print_config_lists_every_effective_value(
         "spread_weight = 0.05",
         "pinch_gap = 0.2",
         "steady_max_speed = 2.5",
+        "[relative]",
+        "gain = 800.0",
+        "acceleration = 0.5",
+        "max_gain = 3000.0",
+        "[clutch]",
+        "finger_open = 1.4",
+        "pinch_gap = 0.3",
+        "debounce_ms = 100.0",
     ]:
         assert expected in out
 
@@ -154,7 +171,14 @@ def test_printed_config_loads_back_unchanged(tmp_path: Path) -> None:
         ("[camera]\nrotate = 45\n", "camera.rotate"),
         ("[camera]\nfps = 0\n", "camera.fps"),
         ("[active_region]\nwidth_fraction = 1.5\n", "active_region.width_fraction"),
-        ('[control]\nmode = "relative"\n', "control.mode"),
+        ('[control]\nmode = "joystick"\n', "control.mode"),
+        ("[relative]\ngain = 0\n", "relative.gain"),
+        ("[relative]\nacceleration = -1\n", "relative.acceleration"),
+        ("[relative]\ngain = 900\nmax_gain = 800\n", "relative.max_gain"),
+        ("[relative]\ngian = 900\n", "relative.gian"),
+        ("[clutch]\nscore_threshold = 2\n", "clutch.score_threshold"),
+        ("[clutch]\ndebounce_ms = -5\n", "clutch.debounce_ms"),
+        ("[clutch]\nfinger_curled = 1.6\nfinger_open = 1.4\n", "clutch.finger_curled"),
         ("[pinch]\nclose_threshold = 0.5\nopen_threshold = 0.4\n", "pinch.close_threshold"),
         ("[timing]\nunpause_hold_s = -1\n", "timing.unpause_hold_s"),
         ("[open_palm]\nscore_threshold = 1.5\n", "open_palm.score_threshold"),
@@ -176,8 +200,39 @@ def test_invalid_file_names_the_key(tmp_path: Path, toml: str, key: str) -> None
 
 
 def test_unknown_control_mode_lists_valid_ones(tmp_path: Path) -> None:
-    with pytest.raises(ConfigError, match="valid values are absolute"):
+    with pytest.raises(ConfigError, match="control.mode.*valid values are relative, absolute"):
         load_config(write(tmp_path, '[control]\nmode = "teleport"\n'))
+
+
+@pytest.mark.parametrize("mode", ["relative", "absolute"])
+def test_both_control_modes_come_from_the_file_and_the_flag(tmp_path: Path, mode: str) -> None:
+    other = "absolute" if mode == "relative" else "relative"
+    path = write(tmp_path, f'[control]\nmode = "{mode}"\n')
+
+    assert load_config(path).control.mode == mode
+    assert load_config(path, {"control": {"mode": other}}).control.mode == other
+
+
+def test_control_mode_flag_reaches_the_preview_config(
+    fake_preview: FakePreview, granted_probe: PermissionProbe
+) -> None:
+    assert main(["--control-mode", "absolute"], probe=granted_probe, preview=fake_preview) == 0
+
+    assert fake_preview.calls[0][0].control.mode == "absolute"
+
+
+def test_relative_and_clutch_values_come_from_the_file(tmp_path: Path) -> None:
+    path = write(
+        tmp_path,
+        "[relative]\ngain = 500\nacceleration = 0\nmax_gain = 500\n"
+        "[clutch]\nscore_threshold = 0.7\ndebounce_ms = 50\n",
+    )
+
+    config = load_config(path)
+
+    assert (config.relative.gain, config.relative.acceleration) == (500.0, 0.0)
+    assert config.relative.max_gain == 500.0
+    assert (config.clutch.score_threshold, config.clutch.debounce_ms) == (0.7, 50.0)
 
 
 def test_invalid_flag_value_names_the_key() -> None:

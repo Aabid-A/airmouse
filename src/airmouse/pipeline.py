@@ -30,7 +30,8 @@ from typing import TextIO
 from airmouse.calibrate import region_for
 from airmouse.camera import Camera, CameraError
 from airmouse.config import Config
-from airmouse.controller import Controller, Output, PalmReading, Phase, State
+from airmouse.controller import Controller, FistReading, Output, PalmReading, Phase, State
+from airmouse.displays import Display, Screen
 from airmouse.frame import Frame, Region, prepare_frame
 from airmouse.gestures import Point
 from airmouse.output import OutputError
@@ -90,10 +91,15 @@ class ShutdownOutput:
     press that arrives after shutdown never reaches the Mac. If `close` cannot get
     the lock in time (the worker is inside an output call), it leaves a flag, and
     the worker lifts the button as soon as that call returns.
+
+    It is also the `Screen` relative mode reads (displays and the cursor position),
+    through the same lock; after close those reads answer "unknown" (no displays,
+    no position), so nothing touches Quartz once airmouse is shutting down.
     """
 
-    def __init__(self, output: Output, out: TextIO) -> None:
+    def __init__(self, output: Output, out: TextIO, screen: Screen | None = None) -> None:
         self._output = output
+        self._screen = screen
         self._out = out
         self._lock = threading.Lock()
         self._closing = threading.Event()
@@ -113,6 +119,32 @@ class ShutdownOutput:
 
     def release_drag(self) -> None:
         self._forward(self._output.release_drag)
+
+    def displays(self) -> tuple[Display, ...]:
+        screen = self._screen
+        found: tuple[Display, ...] = ()
+        if screen is None:
+            return found
+
+        def read() -> None:
+            nonlocal found
+            found = screen.displays()
+
+        self._forward(read)
+        return found
+
+    def cursor_position(self) -> Point | None:
+        screen = self._screen
+        found: Point | None = None
+        if screen is None:
+            return found
+
+        def read() -> None:
+            nonlocal found
+            found = screen.cursor_position()
+
+        self._forward(read)
+        return found
 
     def close(self, timeout: float = -1) -> None:
         """Lift a held button once and ignore everything after. `timeout` < 0 waits as long
@@ -196,6 +228,8 @@ class ControllerStatus:
     hold_progress: float
     no_hand: bool
     reading: PalmReading
+    clutch: bool = False
+    fist: FistReading | None = None
 
     @classmethod
     def of(cls, controller: Controller) -> "ControllerStatus":
@@ -205,6 +239,8 @@ class ControllerStatus:
             controller.hold_progress,
             controller.no_hand,
             controller.reading,
+            controller.clutch,
+            controller.fist_reading,
         )
 
 
@@ -250,6 +286,7 @@ class Worker:
         controller: Controller | None,
         output: ShutdownOutput | None,
         region: Region,
+        outline_region: bool = True,
         show_camera_image: bool,
         clock: Callable[[], float],
         timer: Callable[[], float],
@@ -261,6 +298,7 @@ class Worker:
         self._controller = controller
         self._output = output
         self._region = region  # the mapped region the Preview outlines
+        self._outline_region = outline_region  # False in relative mode: nothing maps through it
         self._show_camera_image = show_camera_image
         self._clock = clock
         self._timer = timer
@@ -334,7 +372,7 @@ class Worker:
         height, width = frame.shape[:2]
         if self._controller is None:  # calibrate mode outlines the Active region
             return FrameView(width, height, region_for(self._config, frame))
-        return FrameView(width, height, self._region)
+        return FrameView(width, height, self._region, outline=self._outline_region)
 
     def _record(
         self, started: float, delivered: float, prepared: float, tracked: float, updated: float

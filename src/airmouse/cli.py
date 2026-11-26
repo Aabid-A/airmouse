@@ -56,7 +56,10 @@ def build_parser() -> argparse.ArgumentParser:
         help="Active region width as a fraction of the frame width",
     )
     parser.add_argument(
-        "--control-mode", metavar="MODE", help=f"one of: {', '.join(CONTROL_MODES)}"
+        "--control-mode",
+        metavar="MODE",
+        help=f"one of: {', '.join(CONTROL_MODES)} (default: relative, across all displays; "
+        "absolute maps the Active region to the main display)",
     )
     parser.add_argument(
         "--show-camera-image",
@@ -73,8 +76,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--debug-gestures",
         action="store_true",
-        help="draw the Open palm score, the wrist speed against the Hold ring's steadiness "
-        "tolerance and per-stage timings in the Preview, to tune the open_palm config "
+        help="draw the Open palm score, the Fist score, the wrist speed against the Hold "
+        "ring's steadiness tolerance and per-stage timings in the Preview, to tune the "
+        "open_palm and clutch config "
         "(no camera pixels; ignored with --calibrate)",
     )
     return parser

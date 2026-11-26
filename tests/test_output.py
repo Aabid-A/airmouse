@@ -4,6 +4,7 @@ from typing import Any
 
 import pytest
 
+from airmouse.displays import Display
 from airmouse.output import OutputError, QuartzOutput
 
 
@@ -80,3 +81,71 @@ def test_a_missing_quartz_module_is_a_clear_error(monkeypatch: pytest.MonkeyPatc
 
     with pytest.raises(OutputError, match="Quartz"):
         QuartzOutput.open()
+
+
+class DisplayQuartz(FakeQuartz):
+    """A fake Quartz with several displays and a cursor, for relative mode's reads."""
+
+    def __init__(self, displays: dict[int, tuple[float, float, float, float]], **kwargs: Any):
+        super().__init__(**kwargs)
+        self.screens = displays
+        self.list_error = 0
+        self.cursor: tuple[float, float] | None = (12.5, -40.0)
+
+    def CGGetActiveDisplayList(self, most: int, ids: Any, count: Any) -> Any:
+        found = tuple(self.screens)[:most]
+        return (self.list_error, found, len(found))
+
+    def CGDisplayBounds(self, display: int) -> Any:
+        if display not in self.screens:  # the main display, for the constructor
+            return self.bounds
+        x, y, width, height = self.screens[display]
+        return SimpleNamespace(
+            origin=SimpleNamespace(x=x, y=y), size=SimpleNamespace(width=width, height=height)
+        )
+
+    def CGEventCreate(self, source: Any) -> Any:
+        return None if self.cursor is None else "event"
+
+    def CGEventGetLocation(self, event: Any) -> Any:
+        assert self.cursor is not None
+        return SimpleNamespace(x=self.cursor[0], y=self.cursor[1])
+
+
+ARRANGEMENT = {
+    1: (0.0, 0.0, 1440.0, 900.0),  # the main display
+    7: (-1920.0, -180.0, 1920.0, 1080.0),  # to the left and higher: negative coordinates
+}
+
+
+def test_it_lists_the_active_displays_in_global_points() -> None:
+    output = QuartzOutput(DisplayQuartz(ARRANGEMENT))
+
+    assert output.displays() == (
+        Display(0.0, 0.0, 1440.0, 900.0),
+        Display(-1920.0, -180.0, 1920.0, 1080.0),
+    )
+
+
+def test_a_display_list_quartz_cannot_read_is_empty() -> None:
+    quartz = DisplayQuartz(ARRANGEMENT)
+    quartz.list_error = 1001
+
+    assert QuartzOutput(quartz).displays() == ()
+
+
+def test_it_reads_the_cursor_position_in_global_points() -> None:
+    quartz = DisplayQuartz(ARRANGEMENT)
+    output = QuartzOutput(quartz)
+
+    assert output.cursor_position() == (12.5, -40.0)
+    quartz.cursor = None
+    assert output.cursor_position() is None
+
+
+def test_a_move_on_a_display_left_of_the_main_one_posts_negative_coordinates() -> None:
+    quartz = DisplayQuartz(ARRANGEMENT)
+
+    QuartzOutput(quartz).move_cursor(-500.0, -100.0)
+
+    assert quartz.posted[0][1][2] == (-500.0, -100.0)

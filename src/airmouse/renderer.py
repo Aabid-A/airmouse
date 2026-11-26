@@ -23,7 +23,7 @@ from functools import lru_cache
 
 import numpy as np
 
-from airmouse.controller import PalmReading, Phase, State
+from airmouse.controller import FistReading, PalmReading, Phase, State
 from airmouse.frame import Region, active_region
 from airmouse.gestures import LANDMARK_COUNT, Landmarks, Point
 
@@ -158,6 +158,7 @@ DEBUG_BAR_HEIGHT = 6
 DEBUG_BAR_OFFSET = GLYPH_HEIGHT + 3  # from the top of a meter's text to its bar
 DEBUG_TICK_OVERHANG = 2
 DEBUG_LINE = 10
+DEBUG_FIST_TOP = DEBUG_TOP + 2 * DEBUG_ROW + 2 * DEBUG_LINE + 4  # under COUNTS and STEADY
 DEBUG_SPEED_RANGE = 2.0  # the speed bar is full at this many times its limit
 DEBUG_NUMBER_CAP = 99.9
 
@@ -167,12 +168,14 @@ class FrameView:
     """The prepared frame as the Preview draws it: its size in pixels and the Active region.
 
     `region` is in the prepared frame's normalised coordinates, the same ones the
-    landmarks use, so it must be the region the cursor mapping uses.
+    landmarks use, so it must be the region the cursor mapping uses. `outline` is
+    False in relative control mode, where no region maps to the screen, so none is drawn.
     """
 
     width: int = 640
     height: int = 480
     region: Region = active_region(640, 480, 0.6)
+    outline: bool = True
 
 
 DEFAULT_VIEW = FrameView()
@@ -181,10 +184,12 @@ DEFAULT_VIEW = FrameView()
 @dataclass(frozen=True)
 class DebugReadout:
     """What `--debug-gestures` draws: the palm reading, then rows of (name, value) on the right:
-    stage timings in ms and, last, the tracking and window rates in frames per second."""
+    stage timings in ms and, last, the tracking and window rates in frames per second.
+    `fist`, when given, adds the Fist score against the clutch threshold under the palm."""
 
     palm: PalmReading
     timings: tuple[tuple[str, float], ...] = ()
+    fist: FistReading | None = None
 
 
 @dataclass
@@ -270,6 +275,7 @@ def render_preview(
     no_hand: bool = False,
     phase: Phase = Phase.IDLE,
     view: FrameView = DEFAULT_VIEW,
+    clutch: bool = False,
 ) -> Image:
     """The Preview for a state.
 
@@ -280,17 +286,20 @@ def render_preview(
     `camera_on`, and the FPS readout when `fps` is given. `camera_image` (the
     prepared frame, `view` sized) is drawn behind everything only when
     `show_camera_image` is True: the default Privacy preview ignores it. `debug`
-    adds the gesture readout. `no_hand` (the No hand state) shows NO HAND.
-    `view` is the prepared frame's size and the Active region.
+    adds the gesture readout. `no_hand` (the No hand state) shows NO HAND, and
+    `clutch` (the Fist clutch is held) shows CLUTCH. `view` is the prepared frame's
+    size and the Active region.
     """
     canvas = _base(view, camera_on, REGION_PREVIEW, camera_image, show_camera_image)
     paused = state is State.PAUSED
-    pressed = not paused and not no_hand and phase is not Phase.IDLE
+    pressed = not paused and not no_hand and not clutch and phase is not Phase.IDLE
     if paused:
         _draw_hold_ring(canvas, view, hold_progress)
         _draw_label(canvas, "PAUSED", TEXT_PAUSED, "HOLD AN OPEN PALM TO START")
     elif no_hand:
         _draw_label(canvas, "NO HAND", TEXT_PAUSED, "SHOW YOUR HAND TO THE CAMERA")
+    elif clutch:
+        _draw_label(canvas, "CLUTCH", TEXT_PAUSED, "POINT TO MOVE AGAIN")
     elif phase is Phase.DRAGGING:
         _draw_label(canvas, "DRAG", TEXT_PINCH, "OPEN THE PINCH TO DROP")
     elif phase is Phase.PRESSED:
@@ -362,7 +371,8 @@ def _cached_base(view: FrameView, camera_on: bool, region_colour: Colour) -> Can
 
 
 def _draw_static(canvas: Canvas, view: FrameView, camera_on: bool, region_colour: Colour) -> None:
-    _draw_region(canvas, view, region_colour)
+    if view.outline:
+        _draw_region(canvas, view, region_colour)
     if camera_on:
         _draw_camera_on(canvas)
 
@@ -703,7 +713,7 @@ def _draw_debug(canvas: Canvas, readout: DebugReadout) -> None:
     palm = readout.palm
     _draw_meter(
         canvas,
-        0,
+        DEBUG_TOP,
         f"PALM {_number(palm.score, places=2)}/{_number(palm.threshold, places=2)}",
         fraction=palm.score,
         mark=palm.threshold,
@@ -712,7 +722,7 @@ def _draw_debug(canvas: Canvas, readout: DebugReadout) -> None:
     )
     _draw_meter(
         canvas,
-        1,
+        DEBUG_TOP + DEBUG_ROW,
         f"SPEED {_number(palm.speed)}/{_number(palm.speed_limit)}",
         fraction=palm.speed,
         mark=palm.speed_limit,
@@ -724,6 +734,17 @@ def _draw_debug(canvas: Canvas, readout: DebugReadout) -> None:
         text = f"{label} {'YES' if good else 'NO'}"
         colour = TEXT_ACTIVE if good else TEXT_PAUSED
         _draw_text(canvas, text, DEBUG_LEFT, top + line * DEBUG_LINE, DEBUG_SIZE, 1, colour)
+    fist = readout.fist
+    if fist is not None:
+        _draw_meter(
+            canvas,
+            DEBUG_FIST_TOP,
+            f"FIST {_number(fist.score, places=2)}/{_number(fist.threshold, places=2)}",
+            fraction=fist.score,
+            mark=fist.threshold,
+            full=1.0,
+            good=fist.counts,
+        )
     for line, (name, milliseconds) in enumerate(readout.timings):
         text = f"{name} {_number(milliseconds)}"
         left = WIDTH - DEBUG_LEFT - _text_width(text, DEBUG_SIZE, DEBUG_TRACKING)
@@ -738,7 +759,7 @@ def _fill(canvas: Canvas, left: int, top: int, width: int, height: int, colour: 
 
 def _draw_meter(
     canvas: Canvas,
-    row: int,
+    top: int,
     text: str,
     *,
     fraction: float | None,
@@ -746,8 +767,7 @@ def _draw_meter(
     full: float,
     good: bool,
 ) -> None:
-    """A line of text over a bar filled to `fraction` of `full`, with a tick at `mark`."""
-    top = DEBUG_TOP + row * DEBUG_ROW
+    """A line of text at `top` over a bar filled to `fraction` of `full`, with a tick at `mark`."""
     _draw_text(canvas, text, DEBUG_LEFT, top, DEBUG_SIZE, DEBUG_TRACKING, STATUS_TEXT)
     bar_top = top + DEBUG_BAR_OFFSET
     _fill(canvas, DEBUG_LEFT, bar_top, DEBUG_BAR_WIDTH, DEBUG_BAR_HEIGHT, RING_TRACK)

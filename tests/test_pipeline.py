@@ -17,8 +17,9 @@ import pytest
 import airmouse.app
 from airmouse.app import DEFAULT_DISPLAY, STUCK_MESSAGE, run_live_preview, run_preview
 from airmouse.camera import CameraError
-from airmouse.config import Config
+from airmouse.config import Config, ControlConfig
 from airmouse.controller import Controller, State
+from airmouse.displays import Display
 from airmouse.frame import active_region
 from airmouse.gestures import Landmarks, Point
 from airmouse.mapping import make_cursor_path, mapped_region
@@ -26,11 +27,13 @@ from airmouse.output import OutputError
 from airmouse.pipeline import WORKER_NAME, LatestSlot, ShutdownOutput, Snapshot, Worker
 from airmouse.renderer import DebugReadout, Image
 from airmouse.tracker import TrackerError
+from anatomy import synthetic_hand
 from hands import open_hand, pointing_hand
 from lockstep import WAIT_S, ThreadClock, join_worker, lockstep
 from test_pinch import AIM, Clock, RecordingOutput, Script, drag_script, hand
 
 FRAME_S = 1 / 30
+ABSOLUTE = Config(control=ControlConfig(mode="absolute"))
 
 
 def worker_thread() -> threading.Thread | None:
@@ -139,8 +142,11 @@ def make_worker(
     *,
     camera: Any = None,
     show_camera_image: bool = False,
+    config: Config | None = None,
+    outline_region: bool = False,
 ) -> tuple[Worker, LatestSlot[Snapshot]]:
-    config = Config()
+    """A Worker for `config` (default: relative mode, so no region outline unless asked)."""
+    config = config or Config()
     guarded = None if output is None else ShutdownOutput(output, io.StringIO())
     controller = (
         None
@@ -151,6 +157,7 @@ def make_worker(
             make_cursor_path(config, DEFAULT_DISPLAY),
             config.open_palm,
             config.pinch,
+            config.clutch,
         )
     )
     slot = LatestSlot[Snapshot]()
@@ -162,6 +169,7 @@ def make_worker(
         controller=controller,
         output=guarded,
         region=mapped_region(config, DEFAULT_DISPLAY),
+        outline_region=outline_region,
         show_camera_image=show_camera_image,
         clock=Clock(),
         timer=Clock(),
@@ -764,3 +772,106 @@ def test_a_failing_lift_on_close_is_reported_not_raised() -> None:
     ShutdownOutput(output, out).close()
 
     assert "could not release the mouse button" in out.getvalue()
+
+
+# --- relative mode's reads (displays, cursor position) go through the ShutdownOutput ---
+
+
+class CountingScreen:
+    """A Screen that counts its reads."""
+
+    def __init__(self) -> None:
+        self.reads: list[str] = []
+
+    def displays(self) -> tuple[Display, ...]:
+        self.reads.append("displays")
+        return (Display(0, 0, 1440, 900), Display(1440, 0, 1920, 1080))
+
+    def cursor_position(self) -> Point | None:
+        self.reads.append("cursor")
+        return (100.0, 200.0)
+
+
+def test_the_shutdown_output_forwards_the_screen_reads_until_it_is_closed() -> None:
+    screen = CountingScreen()
+    guarded = ShutdownOutput(RecordingOutput(), io.StringIO(), screen)
+
+    assert guarded.displays() == screen.displays()
+    assert guarded.cursor_position() == (100.0, 200.0)
+    screen.reads.clear()
+
+    guarded.close()
+
+    assert guarded.displays() == ()
+    assert guarded.cursor_position() is None
+    assert screen.reads == []  # nothing reaches Quartz after shutdown
+
+
+def test_without_a_screen_the_reads_answer_unknown() -> None:
+    guarded = ShutdownOutput(RecordingOutput(), io.StringIO())
+
+    assert guarded.displays() == ()
+    assert guarded.cursor_position() is None
+
+
+def test_a_press_after_shutdown_is_still_ignored_with_relative_mode_reading_the_screen() -> None:
+    output = RecordingOutput()
+    screen = CountingScreen()
+    guarded = ShutdownOutput(output, io.StringIO(), screen)
+    config = Config()  # relative mode, the default
+    controller = Controller(
+        config.timing,
+        guarded,
+        make_cursor_path(config, DEFAULT_DISPLAY, guarded),
+        config.open_palm,
+        config.pinch,
+        config.clutch,
+    )
+    time = 0.0
+    for landmarks in [open_hand()] * 30 + [hand(AIM)] * 6 + [hand(0.1)] * 3:
+        controller.update(time, landmarks)
+        time += FRAME_S
+    assert controller.state is State.ACTIVE
+    assert "move" in output.kinds()
+
+    guarded.close()
+    output.events.clear()
+    screen.reads.clear()
+    for step in range(12):  # the pinch moves into a drag, then opens: a press would follow
+        controller.update(time, hand(0.1, dx=0.02 * step))
+        time += FRAME_S
+    controller.update(time, hand(0.6))
+
+    assert output.events == []
+    assert screen.reads == []
+
+
+def test_the_snapshot_carries_the_clutch_and_the_fist_reading() -> None:
+    tracker = ListTracker(open_hand())
+    worker, _ = make_worker(tracker, RecordingOutput())
+    for _ in range(30):
+        worker.step()
+    tracker.landmarks = synthetic_hand("fist")
+
+    snapshots = [worker.step() for _ in range(6)]
+
+    status = snapshots[-1].controller if snapshots[-1] is not None else None
+    assert status is not None
+    assert status.state is State.ACTIVE
+    assert status.clutch
+    assert status.fist is not None and status.fist.counts and status.fist.clutch
+    first = snapshots[0].controller if snapshots[0] is not None else None
+    assert first is not None and not first.clutch  # not before the debounce
+
+
+def test_relative_mode_snapshots_do_not_outline_the_region_and_absolute_ones_do() -> None:
+    relative, _ = make_worker(ListTracker(open_hand()), RecordingOutput())
+    absolute, _ = make_worker(
+        ListTracker(open_hand()), RecordingOutput(), config=ABSOLUTE, outline_region=True
+    )
+
+    relative_view = relative.step()
+    absolute_view = absolute.step()
+
+    assert relative_view is not None and not relative_view.view.outline
+    assert absolute_view is not None and absolute_view.view.outline

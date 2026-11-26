@@ -7,7 +7,7 @@ the fingertips and 5/9/13/17 the finger base (MCP) joints.
 import math
 from collections.abc import Sequence
 
-from airmouse.config import OpenPalmConfig, PinchConfig
+from airmouse.config import ClutchConfig, OpenPalmConfig, PinchConfig
 
 type Point = tuple[float, float]
 type Landmarks = Sequence[Point]
@@ -20,6 +20,7 @@ INDEX_MCP = 5
 INDEX_TIP = 8
 MIDDLE_MCP = 9
 FINGER_TIPS = (8, 12, 16, 20)
+FINGER_BASES = (5, 9, 13, 17)  # the MCP joint of each finger in FINGER_TIPS
 
 # All distances are in hand sizes (wrist to the middle finger's base), so the
 # Open palm reads the same near or far from the camera.
@@ -27,6 +28,7 @@ THUMB_OUT = 0.7  # a thumb tip this far from the index finger's base is fully ou
 FINGER_SPREAD = 0.25  # neighbouring fingertips this far apart are fully spread
 
 DEFAULT_OPEN_PALM = OpenPalmConfig()
+DEFAULT_CLUTCH = ClutchConfig()
 
 
 def distance(a: Point, b: Point) -> float:
@@ -113,3 +115,40 @@ def open_palm_score(landmarks: Landmarks, config: OpenPalmConfig = DEFAULT_OPEN_
 def is_open_palm(landmarks: Landmarks, config: OpenPalmConfig = DEFAULT_OPEN_PALM) -> bool:
     """The Open palm score reaches its threshold."""
     return open_palm_score(landmarks, config) >= config.score_threshold
+
+
+def finger_curl(landmarks: Landmarks, config: ClutchConfig = DEFAULT_CLUTCH) -> float:
+    """How curled the least curled of the four fingers is, from 0 (open) to 1 (curled).
+
+    Each finger is measured as wrist-to-tip over wrist-to-base distance, a ratio that
+    stays the same near or far from the camera and shrinks as the finger folds into
+    the palm. The index finger counts like the others, so the Pointer pose scores 0.
+    Unlike `fist_score`, a thumb on the index tip does not zero it.
+    """
+    if len(landmarks) != LANDMARK_COUNT:
+        return 0.0
+    wrist = landmarks[WRIST]
+    curls: list[float] = []
+    for tip, base in zip(FINGER_TIPS, FINGER_BASES, strict=True):
+        reach = distance(wrist, landmarks[base])
+        if reach <= 0:
+            return 0.0
+        ratio = distance(wrist, landmarks[tip]) / reach
+        curls.append(1 - _ramp(ratio, config.finger_curled, config.finger_open))
+    return min(curls)
+
+
+def fist_score(landmarks: Landmarks, config: ClutchConfig = DEFAULT_CLUTCH) -> float:
+    """How much the Hand looks like a Fist (all four fingers curled), from 0 to 1.
+
+    The thumb is free, except that a thumb tip touching the index tip (closer than
+    `config.pinch_gap` hand sizes) is a Pinch and scores 0.
+    """
+    if len(landmarks) != LANDMARK_COUNT:
+        return 0.0
+    size = hand_size(landmarks)
+    if size <= 0:
+        return 0.0
+    if distance(landmarks[THUMB_TIP], landmarks[INDEX_TIP]) < config.pinch_gap * size:
+        return 0.0
+    return finger_curl(landmarks, config)

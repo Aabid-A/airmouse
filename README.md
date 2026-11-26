@@ -35,14 +35,19 @@ Each camera frame goes through these steps:
    so a hand moved right moves right in the picture.
 2. **Tracker.** MediaPipe's HandLandmarker finds one Hand as 21 landmarks, using the
    vendored Hand model (`hand_landmarker.task`, see [ADR 0003](docs/adr/0003-vendor-the-hand-model.md)).
-3. **Gestures.** The landmarks are scored for the Open palm and measured for the Pinch.
+3. **Gestures.** The landmarks are scored for the Open palm and the Fist, and measured
+   for the Pinch.
 4. **Controller.** A small state machine decides what the Hand means (below).
-5. **Control mode.** While active, the Pointer maps to a screen point through the Active
-   region, then a One Euro filter smooths it. Only the absolute control mode exists
-   ([ADR 0002](docs/adr/0002-control-mode-is-pluggable.md)).
-6. **Output.** Quartz posts the cursor moves and left-button events.
-7. **Renderer.** The Preview draws the Hand skeleton, the Active region outline, the state
-   label and the Camera-on indicator on a plain dark background.
+5. **Control mode.** While active, a One Euro filter smooths the Pointer, and the control
+   mode turns it into a cursor position
+   ([ADR 0002](docs/adr/0002-control-mode-is-pluggable.md)). Relative mode (the default)
+   moves the cursor by the Pointer's movement, across all your displays; absolute mode
+   maps the Active region to the main display. See [Control mode](#control-mode).
+6. **Output.** Quartz posts the cursor moves and left-button events, and reports the
+   displays and where the cursor is.
+7. **Renderer.** The Preview draws the Hand skeleton, the state label and the Camera-on
+   indicator on a plain dark background (and, in absolute mode, the Active region
+   outline).
 8. **Config.** Every number below comes from `~/.config/airmouse/config.toml`, with
    command-line flags on top.
 
@@ -62,12 +67,36 @@ released when the worker comes back or when airmouse exits. See
 
 Terms used in this document are defined in [GLOSSARY.md](GLOSSARY.md).
 
+### Control mode
+
+`[control] mode` (or `--control-mode`) picks how the Pointer moves the cursor.
+
+**Relative** (the default) works like a mouse or trackpad. The cursor moves by how far
+the Pointer moves, from wherever the cursor is when airmouse starts following. Movement
+is measured in hand sizes, so it feels the same near or far from the camera, and
+`[relative]` sets the gain, the acceleration and a cap. Bending or straightening the
+index finger alone does not move the cursor; moving the hand does. The cursor moves
+across all your displays, of any size and arrangement, and stops at the outer edges of
+the whole desk: a move off an edge slides along it. airmouse reads the display list about
+once a second, so plugging a display in or out while it runs is fine; if the display
+under the cursor goes away, the cursor moves to the nearest one left. Display
+coordinates are in points, so Retina displays need nothing special.
+
+To reach further, use the **clutch**: make a Fist (all four fingers curled), move your
+hand back, and point again. While the Fist is held the cursor stays put, and taking your
+hand out of the camera's view does the same (No hand). The cursor never jumps when you
+point again.
+
+**Absolute** maps the Active region to the main display only: the cursor goes where the
+Pointer is in the region.
+
 ### Active region
 
-The Active region is a rectangle in the middle of the camera frame, with the same shape
-as your screen. The Pointer inside it maps to the whole screen, so your arm does not have
-to travel far. A Pointer outside it clamps to the nearest screen edge. Its width is
-`[active_region] width_fraction` of the frame (default 0.6), and the Preview outlines it.
+Absolute mode only. The Active region is a rectangle in the middle of the camera frame,
+with the same shape as your screen. The Pointer inside it maps to the whole main display,
+so your arm does not have to travel far. A Pointer outside it clamps to the nearest
+screen edge. Its width is `[active_region] width_fraction` of the frame (default 0.6),
+and in absolute mode the Preview outlines it. Calibrate mode always shows it.
 
 ### Gestures
 
@@ -76,6 +105,7 @@ to travel far. A Pointer outside it clamps to the nearest screen edge. Its width
 | Pointer | The index fingertip | Moves the cursor while airmouse is active. |
 | Pinch | Thumb tip and index tip brought together, measured against hand size | A short Pinch is a click. A Pinch held while the Pointer moves is a drag. |
 | Open palm | The four fingers held upright and extended, together or spread | Pauses at once. Held steady, it unpauses. |
+| Fist | All four fingers curled, the index included; the thumb is free | Held for 100 ms (`[clutch] debounce_ms`), the clutch: the cursor stops following and any drag is released. |
 
 Details that matter in use:
 
@@ -83,6 +113,11 @@ Details that matter in use:
 - A Pinch released within 300 ms without the Pointer moving is a click. If the Pointer
   moves further while the Pinch is closed, it becomes a drag until the Pinch opens.
 - A closed Pinch never counts as an Open palm.
+- A Fist is never a Pinch or an Open palm. Closing a fist moves the index towards the
+  thumb, so while the fingers curl the cursor holds still, a Pinch that closes on the way
+  is cancelled without a click, and a drag only starts when the whole hand moves. After
+  the clutch the fingers must open fully (the Pointer pose) before the cursor follows or
+  a Pinch can click.
 - After a held Open palm unpauses airmouse, the Open palm is ignored until the Hand
   leaves that shape, so the same palm cannot pause it again at once.
 
@@ -96,6 +131,8 @@ airmouse starts **Paused**: Hand movement produces no input.
 | active | Paused | An Open palm lasts 150 ms (`pause_debounce_ms`). Any drag is released. |
 | active | No hand | No Hand has been seen for 250 ms (`no_hand_timeout_ms`). |
 | No hand | active | The Hand returns. |
+| active | clutch | A Fist lasts 100 ms (`[clutch] debounce_ms`). Any drag is released. |
+| clutch | active | The fingers open again into the Pointer pose. |
 
 In No hand the cursor freezes and any drag is released. airmouse stays unpaused. When the
 Hand returns, the cursor follows the Pointer again from its new position. A Hand that
@@ -103,7 +140,9 @@ returns still pinched must open its Pinch before a click or drag can start, so l
 Hand never presses the button. A dropout shorter than 250 ms changes nothing. Paused shows
 as Paused whether or not a Hand is visible.
 
-The Preview labels each state: PAUSED, ACTIVE, PINCH, DRAG and NO HAND. The label is always
+In relative mode the cursor then carries on from where it is, so it never jumps.
+
+The Preview labels each state: PAUSED, ACTIVE, PINCH, DRAG, NO HAND and CLUTCH. The label is always
 text, never only a colour.
 
 ## Install and run
@@ -150,7 +189,7 @@ usage: airmouse [-h] [--version] [--config PATH] [--print-config] [--camera N]
 | `--camera N`, `--width`, `--height`, `--fps` | Override the `[camera]` settings. |
 | `--rotate {0,90,180,270}`, `--mirror` / `--no-mirror` | Override `[camera] rotate` and `mirror`. |
 | `--active-region-width FRACTION` | Override `[active_region] width_fraction`. |
-| `--control-mode MODE` | Override `[control] mode`. Only `absolute` exists. |
+| `--control-mode MODE` | Override `[control] mode`: `relative` (the default) or `absolute`. |
 | `--calibrate` | Calibrate mode: see the Hand and the Active region, with no cursor input. |
 | `--debug-gestures` | Draw the Open palm score, the wrist speed, per-stage timings and the tracking and window rates in the Preview. |
 | `--show-camera-image` | Debugging only. Draw the camera image behind the skeleton. See [Privacy](#privacy). |
@@ -170,17 +209,18 @@ the skeleton moves the way your hand does, for example `uv run airmouse --calibr
 --rotate 90`. Then save the values in the config file. Rotate and mirror are applied
 before the Active region is placed.
 
-### Tuning the Open palm
+### Tuning the Open palm and the Fist
 
-The Open palm thresholds were tuned on synthetic landmarks only, not on a real Hand. If
-the Open palm triggers too easily or not at all on your Hand, run:
+The Open palm and Fist thresholds were tuned on synthetic landmarks only, not on a real
+Hand. If either triggers too easily or not at all on your Hand, run:
 
 ```bash
 uv run airmouse --debug-gestures
 ```
 
 The Preview then draws the Open palm score against its threshold, the wrist speed against
-the steadiness tolerance, and a column of readings on the right:
+the steadiness tolerance, the Fist score against the clutch threshold, and a column of
+readings on the right:
 
 - The cursor path (worker thread), in ms: CAM is the wait for the camera, PREP frame
   preparation, TRACK the Hand tracker, CTRL the Controller and cursor output, and FRAME
@@ -192,7 +232,9 @@ the steadiness tolerance, and a column of readings on the right:
   FPS in the Preview's corner is the same number), and UI FPS, images the window shows
   per second.
 
-Adjust the `[open_palm]` settings below.
+Adjust the `[open_palm]` and `[clutch]` settings below. The FIST bar must read 0.00
+while you point: any reading above 0 holds the cursor still, as the fingers might be
+closing into a Fist. If your pointing pose reads above 0, lower `[clutch] finger_open`.
 
 ## Config reference
 
@@ -217,7 +259,7 @@ uv run airmouse --print-config > ~/.config/airmouse/config.toml
 | `[camera] rotate` | `0` | Rotate the frame clockwise by 0, 90, 180 or 270 degrees. Flag `--rotate`. |
 | `[camera] mirror` | `true` | Mirror the frame left to right. Flag `--mirror` or `--no-mirror`. |
 | `[active_region] width_fraction` | `0.6` | Active region width as a fraction of the frame width, from 0 to 1. The region keeps the screen's shape and stays inside the frame. Flag `--active-region-width`. |
-| `[control] mode` | `"absolute"` | The control mode. Only `"absolute"` is valid today. Flag `--control-mode`. |
+| `[control] mode` | `"relative"` | `"relative"` (moves by the Pointer's movement, across all displays) or `"absolute"` (Active region to the main display). Flag `--control-mode`. |
 | `[filter] min_cutoff` | `1.0` | One Euro filter: lower is smoother when the Pointer is slow, higher is more responsive. |
 | `[filter] beta` | `0.007` | One Euro filter: how quickly the smoothing relaxes when the Pointer moves fast. Higher means less lag in fast moves. |
 | `[pinch] close_threshold` | `0.25` | The Pinch closes when the thumb-to-index distance, in hand sizes, falls below this. Must be below `open_threshold`. |
@@ -233,6 +275,14 @@ uv run airmouse --print-config > ~/.config/airmouse/config.toml
 | `[open_palm] spread_weight` | `0.05` | How much spread fingertips add to the score. With `thumb_weight`, the total must stay below 1. |
 | `[open_palm] pinch_gap` | `0.2` | A thumb tip closer than this many hand sizes to the index tip is a Pinch, never an Open palm. |
 | `[open_palm] steady_max_speed` | `2.5` | How fast the wrist may move, in hand sizes per second, for the Hold ring to keep filling. |
+| `[relative] gain` | `800.0` | Relative mode: display points the cursor moves per hand size of Pointer movement, 1 to 20000. |
+| `[relative] acceleration` | `0.5` | Relative mode: extra gain with speed. The gain is `gain * (1 + acceleration * speed)`, speed in hand sizes per second; 0 means none. 0 to 10. |
+| `[relative] max_gain` | `3000.0` | Relative mode: the gain never goes above this, however fast the hand moves. At least `gain`. |
+| `[clutch] score_threshold` | `0.6` | The Fist counts when its score, from 0 to 1, reaches this. |
+| `[clutch] finger_curled` | `1.0` | Each finger is measured as wrist-to-tip over wrist-to-base distance; this ratio or less is fully curled. Must be below `finger_open`. |
+| `[clutch] finger_open` | `1.4` | This ratio or more is an open finger. The Fist score is the least curled finger. |
+| `[clutch] pinch_gap` | `0.3` | A thumb tip closer than this many hand sizes to the index tip is a Pinch, never a Fist. |
+| `[clutch] debounce_ms` | `100.0` | Milliseconds a Fist must last to become the clutch. |
 
 Example `config.toml` for an overhead camera and a smaller Active region:
 
@@ -300,7 +350,8 @@ privacy is a design rule, recorded in
 ## Style
 
 The Preview is dark and cinematic (style mode B): a glowing skeleton on a near-black
-background, a thin Active region outline, and small tracked monospace labels. State
+background, a thin Active region outline in absolute and calibrate mode, and small
+tracked monospace labels. State
 colours always come with a text label. The canvas is a fixed 16:9, drawn at 640x360 and
 shown at 1280x720, so a screen recording of the window is a standard video shape.
 
@@ -316,14 +367,13 @@ are in [docs/recording-a-demo.md](docs/recording-a-demo.md).
 Not built yet (planned):
 
 - Scroll and right-click Gestures.
-- The relative control mode (trackpad-style, with a clutch). `control.mode` accepts only
-  `"absolute"` today.
 
 Known limits:
 
 - macOS on Apple Silicon only.
-- The Open palm thresholds were tuned on synthetic landmarks. Tune them on your Hand with
-  `--debug-gestures` and `[open_palm]`.
+- The Open palm, Fist and relative-mode values were tuned on synthetic landmarks. Tune
+  them on your Hand with `--debug-gestures`, `[open_palm]`, `[clutch]` and `[relative]`.
+- Absolute mode maps to the main display only; relative mode reaches every display.
 - One Hand is tracked.
 - Camera, cursor output and permission checks have only been exercised in tests with
   fakes unless you have run them on your own Mac. Report problems on the
