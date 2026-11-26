@@ -6,6 +6,7 @@ import pytest
 
 from airmouse.config import Config
 from airmouse.pipeline import WORKER_NAME
+from modes import MODES, restore, use_mode
 
 
 class GrantedProbe:
@@ -68,3 +69,14 @@ class FakePreview:
 @pytest.fixture
 def fake_preview() -> FakePreview:
     return FakePreview()
+
+
+@pytest.fixture(params=MODES)
+def control_mode(request: pytest.FixtureRequest) -> Iterator[str]:
+    """Runs the test once per control mode; `modes.base_config()` follows it."""
+    mode: str = request.param
+    previous = use_mode(mode)
+    try:
+        yield mode
+    finally:
+        restore(previous)

@@ -18,15 +18,23 @@ The index fingertip landmark, which drives the cursor.
 _Avoid_: Finger, tip, cursor (the cursor is the on-screen result, not the landmark)
 
 **Active region**:
-The smaller rectangle of the camera frame that is mapped to the whole screen, so the arm does not have to travel far.
+The smaller rectangle of the camera frame that absolute control mode maps to the whole main display, so the arm does not have to travel far.
 _Avoid_: ROI, zone, box
 
 **Control mode**:
-How hand position becomes cursor movement. v1 ships **absolute** (the pointer maps to a screen point through the active region). **Relative** (trackpad-style, with a clutch) is planned and is selected by config.
+How hand position becomes cursor movement, selected by `control.mode`. **Relative**, the default: the cursor moves by the Pointer's movement (in hand sizes, times a gain), from where it is, across all displays, with the Fist as the clutch. **Absolute**: the Pointer maps to a point on the main display through the Active region (ADR 0002).
 _Avoid_: Input mode, tracking mode
 
+**Clutch**:
+Relative mode: the state in which the Hand's movement is ignored, so the hand can be moved back without moving the cursor, like lifting a mouse. Entered by holding a Fist for about 100 ms; a held drag is released, and the Preview says CLUTCH. No hand also holds the cursor still and resumes without a jump, but it is its own state and the Preview says NO HAND. While the fingers are only curling towards a Fist the cursor also holds still, and the Preview says HOLD. The cursor never jumps when following resumes.
+_Avoid_: Freeze, hold-off
+
+**Fist**:
+All four fingers curled into the palm, the index included: each fingertip folded back past its own base along the hand's axis. The thumb is free (beside the fingers or tucked over them), but a thumb tip right on the index tip is a Pinch, never a Fist. Scored from 0 to 1 against a threshold (`[clutch]`). Held, it is the clutch (relative mode only).
+_Avoid_: Grab
+
 **Gesture**:
-A recognised hand shape. v1: **pinch** and **open palm**. Later: scroll, right-click.
+A recognised hand shape. v1: **pinch**, **open palm** and **fist**. Later: scroll, right-click.
 _Avoid_: Pose, sign
 
 **Pinch**:
@@ -46,7 +54,7 @@ State in which hand movement produces no input. airmouse starts Paused. Entered 
 _Avoid_: Idle, disabled, locked
 
 **Preview**:
-The window that shows what airmouse sees: hand skeleton, active region and gesture state. It is the footage used in demos.
+The window that shows what airmouse sees: hand skeleton, gesture state and, in absolute mode, the active region. It is the footage used in demos.
 _Avoid_: Debug window, viewer
 
 **Privacy preview**:
@@ -70,5 +78,5 @@ Everything from the camera to the cursor: camera read, frame preparation, the Ha
 _Avoid_: Pipeline (ambiguous), backend
 
 **Snapshot**:
-The cursor path's latest state, copied and immutable, that the Preview draws: the Hand, the Controller's state, phase and Hold ring, No hand, the debug readings and timings. Only the newest one is kept.
+The cursor path's latest state, copied and immutable, that the Preview draws: the Hand, the Controller's state, phase and Hold ring, No hand, the clutch and the hold, the debug readings and timings. Only the newest one is kept.
 _Avoid_: Frame (a camera image), message, event

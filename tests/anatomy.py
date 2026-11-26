@@ -201,13 +201,126 @@ def synthetic_hand(
     frame heights, and `jitter` is the standard deviation of per-landmark noise in
     frame heights.
     """
+    return seen_hand(
+        POSES[pose], pitch=pitch, roll=roll, size=size, centre=centre, jitter=jitter, seed=seed
+    )
+
+
+def seen_hand(
+    pose: Pose,
+    *,
+    pitch: float = 0.0,
+    roll: float = 0.0,
+    size: float = HAND_HEIGHT,
+    centre: Point = (0.5, 0.75),
+    jitter: float = 0.0,
+    seed: int = 0,
+) -> Landmarks:
+    """`synthetic_hand` for a `Pose` that is not in `POSES` (such as a blend of two)."""
     rng = random.Random(seed)
     turn = math.radians(roll)
     result: list[Point] = []
-    for point in build_palm_units(POSES[pose]):
+    for point in build_palm_units(pose):
         x, y, _ = _rotate_x(point, pitch)
         x, y = x * math.cos(turn) + y * math.sin(turn), y * math.cos(turn) - x * math.sin(turn)
         px = centre[0] + (x * size + rng.gauss(0.0, jitter)) / FRAME_ASPECT
         py = centre[1] - y * size + rng.gauss(0.0, jitter)
         result.append((px, py))
     return result
+
+
+def blend(start: Pose, end: Pose, fraction: float) -> Pose:
+    """The pose `fraction` of the way from `start` to `end`, joint by joint."""
+
+    def mix(a: float, b: float) -> float:
+        return a + (b - a) * fraction
+
+    def mix3(a: Bend, b: Bend) -> Bend:
+        return (mix(a[0], b[0]), mix(a[1], b[1]), mix(a[2], b[2]))
+
+    return Pose(
+        {finger: mix(start.fan[finger], end.fan[finger]) for finger in FINGERS},
+        {finger: mix3(start.bend[finger], end.bend[finger]) for finger in FINGERS},
+        mix3(start.thumb_angles, end.thumb_angles),
+        mix(start.thumb_lift, end.thumb_lift),
+    )
+
+
+BRUSH_FROM, BRUSH_TO = 0.35, 0.6  # where a brushing thumb meets the curling index
+BRUSH_GAP = 0.1  # how close (hand sizes) the brushing thumb tip comes to the index tip
+
+
+def closing_fist(
+    fraction: float,
+    *,
+    start: str = "pointing relaxed",
+    brush: bool = False,
+    pitch: float = 0.0,
+    jitter: float = 0.0,
+    seed: int = 0,
+) -> Landmarks:
+    """A Hand `fraction` of the way from the `start` pose (0) to a fist (1).
+
+    With `brush`, the worst case: partway through, the curling index tip passes right
+    by the thumb tip (`BRUSH_GAP` hand sizes), as it can when the thumb rests forward.
+    That reads as a closed Pinch for a few frames, while the fingers are still curling.
+    """
+    pose = blend(POSES[start], POSES["fist"], fraction)
+    hand = list(seen_hand(pose, pitch=pitch, jitter=jitter, seed=seed))
+    if brush and BRUSH_FROM <= fraction <= BRUSH_TO:
+        size = math.dist(hand[0], hand[9])
+        tip = hand[8]
+        hand[4] = (tip[0] - BRUSH_GAP * size, tip[1])
+    return hand
+
+
+def fist_sequence(
+    *,
+    steps: int = 12,
+    hold: int = 15,
+    start: str = "pointing relaxed",
+    brush: bool = False,
+    pitch: float = 0.0,
+    jitter: float = 0.0,
+) -> list[Landmarks]:
+    """The `start` pose closing into a fist over `steps` frames, the fist held for `hold`
+    frames, then reopening the same way back to the `start` pose. Each frame has its own
+    jitter seed."""
+    fractions = [step / steps for step in range(steps + 1)]
+    fractions = fractions + [1.0] * hold + fractions[::-1]
+    return [
+        closing_fist(fraction, start=start, brush=brush, pitch=pitch, jitter=jitter, seed=frame)
+        for frame, fraction in enumerate(fractions)
+    ]
+
+
+def bent_pointer(
+    bend: Bend,
+    *,
+    pitch: float = 0.0,
+    centre: Point = (0.5, 0.75),
+    jitter: float = 0.0,
+    seed: int = 0,
+) -> Landmarks:
+    """The "pointing" pose with the index bent by `bend` (degrees at its three joints):
+    an ordinary Pointer pose, not held perfectly straight."""
+    pointing = POSES["pointing"]
+    pose = Pose(pointing.fan, {**pointing.bend, "index": bend}, pointing.thumb_angles, 45.0)
+    return seen_hand(pose, pitch=pitch, centre=centre, jitter=jitter, seed=seed)
+
+
+def tucked_fist(
+    gap: float,
+    *,
+    pitch: float = 0.0,
+    centre: Point = (0.5, 0.75),
+    jitter: float = 0.0,
+    seed: int = 0,
+) -> Landmarks:
+    """A fist whose thumb is tucked over the curled index, its tip `gap` hand sizes from
+    the index tip."""
+    hand = list(seen_hand(POSES["fist"], pitch=pitch, centre=centre, jitter=jitter, seed=seed))
+    size = math.dist(hand[0], hand[9])
+    tip = hand[8]
+    hand[4] = (tip[0] - gap * size * 0.6, tip[1] - gap * size * 0.8)
+    return hand

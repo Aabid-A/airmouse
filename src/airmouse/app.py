@@ -13,11 +13,14 @@ window) so tests drive it with fakes. `run_live_preview` wires the real ones.
 The controller gets the real Quartz cursor output on macOS and a no-op output
 elsewhere (and in tests). In calibrate mode (`--calibrate`) the Preview shows the
 Hand and the Active region instead and no controller is built at all, so it can
-make no cursor input. With `--debug-gestures` the Preview also draws the Open
-palm score, the wrist speed, the worker's stage timings (CAM, PREP, TRACK, CTRL,
-and FRAME, the camera's delivery interval), the window's (DRAW, WIN), and the
-tracking and window rates. Frames are rotated and mirrored by `prepare_frame`
-before tracking.
+make no cursor input. In relative control mode (the default) the Preview does not
+outline the Active region, since nothing maps through it; absolute mode and
+calibrate mode do. With `--debug-gestures` the Preview also draws the Open
+palm score, the wrist speed, in relative mode the Fist score and finger curl
+against the clutch and hold thresholds, the
+worker's stage timings (CAM, PREP, TRACK, CTRL, and FRAME, the camera's delivery
+interval), the window's (DRAW, WIN), and the tracking and window rates. Frames
+are rotated and mirrored by `prepare_frame` before tracking.
 """
 
 import math
@@ -29,6 +32,7 @@ from typing import TextIO
 from airmouse.camera import Camera, CameraError, OpenCvCamera, frame_to_image
 from airmouse.config import CameraConfig, Config
 from airmouse.controller import Controller, Output
+from airmouse.displays import FixedScreen, Screen
 from airmouse.mapping import make_cursor_path, mapped_region
 from airmouse.output import OutputError, QuartzOutput
 from airmouse.pipeline import FpsMeter, LatestSlot, ShutdownOutput, Snapshot, StageTimes, Worker
@@ -143,7 +147,7 @@ class PreviewLoop:
                 show_camera_image=self._show_camera_image,
             )
         debug = (
-            DebugReadout(status.reading, self._readout_rows(snapshot))
+            DebugReadout(status.reading, self._readout_rows(snapshot), status.fist)
             if self._debug_gestures
             else None
         )
@@ -159,6 +163,8 @@ class PreviewLoop:
             no_hand=status.no_hand,
             phase=status.phase,
             view=snapshot.view,
+            clutch=status.clutch,
+            holding=status.holding,
         )
 
     def _readout_rows(self, snapshot: Snapshot) -> tuple[tuple[str, float], ...]:
@@ -182,6 +188,7 @@ def run_preview(
     debug_gestures: bool = False,
     output: Output | None = None,
     display: tuple[float, float] = DEFAULT_DISPLAY,
+    screen: Screen | None = None,
     clock: Callable[[], float] = time.monotonic,
     timer: Callable[[], float] = time.perf_counter,
     out: TextIO = sys.stdout,
@@ -189,20 +196,30 @@ def run_preview(
 ) -> int:
     """Run until `q` or Ctrl-C, then release everything. Raises CameraError if frames stop.
 
-    `output` takes cursor moves, clicks and drags (default: none); `display` is its size in pixels.
+    `output` takes cursor moves, clicks and drags (default: none); `display` is the main
+    display's size in points. `screen` reports the displays and the cursor position for
+    relative mode (default: one `display`-sized display, cursor position unknown).
     `debug_gestures` draws the gesture readout and stage timings (`timer` measures them).
     The worker thread's errors are raised here, after everything is released.
     """
-    cursor_output = None if calibrate else ShutdownOutput(output or NoOutput(), out)
+    relative = config.control.mode == "relative"
+    cursor_output = (
+        None
+        if calibrate
+        else ShutdownOutput(output or NoOutput(), out, screen or FixedScreen(display))
+    )
     controller = (
         None
         if cursor_output is None
         else Controller(
             config.timing,
             cursor_output,
-            make_cursor_path(config, display),
+            # Relative mode reads the displays and the cursor through the ShutdownOutput,
+            # so nothing reaches Quartz after shutdown.
+            make_cursor_path(config, display, cursor_output),
             config.open_palm,
             config.pinch,
+            config.clutch if relative else None,  # the clutch is relative-mode only
         )
     )
     slot = LatestSlot[Snapshot]()
@@ -213,7 +230,8 @@ def run_preview(
         slot,
         controller=controller,
         output=cursor_output,
-        region=mapped_region(config, display),  # the Preview outlines what the cursor maps
+        region=mapped_region(config, display),
+        outline_region=not relative,  # absolute mode outlines the region the cursor maps
         show_camera_image=show_camera_image,
         clock=clock,
         timer=timer,
@@ -296,6 +314,7 @@ def run_live_preview(
             debug_gestures=debug_gestures,
             output=output,
             display=output.display_size if output else DEFAULT_DISPLAY,
+            screen=output,
         )
     except (CameraError, OutputError) as error:
         print(f"airmouse: {error}", file=sys.stderr)

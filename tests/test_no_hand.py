@@ -4,16 +4,21 @@ import dataclasses
 import io
 from typing import Any
 
+import pytest
+
 from airmouse.app import run_preview
-from airmouse.config import Config
 from airmouse.controller import Phase, State
 from airmouse.renderer import LABEL_TOP, WIDTH, Image, render_preview
 from anatomy import synthetic_hand
 from hands import open_hand
 from lockstep import lockstep
+from modes import base_config
 from test_pinch import AIM, CLOSED, OPEN, Camera, Clock, RecordingOutput, Rig, Script, hand
 
-TIMEOUT_S = Config().timing.no_hand_timeout_ms / 1000
+# Every test here runs in both control modes (absolute explicitly, relative explicitly).
+pytestmark = pytest.mark.usefixtures("control_mode")
+
+TIMEOUT_S = base_config().timing.no_hand_timeout_ms / 1000
 
 
 def clicks(rig: Rig) -> list[str]:
@@ -73,7 +78,10 @@ def test_a_long_loss_keeps_the_button_up_and_the_cursor_still() -> None:
 
 
 def test_the_timeout_comes_from_config() -> None:
-    config = Config(timing=dataclasses.replace(Config().timing, no_hand_timeout_ms=1000.0))
+    base = base_config()
+    config = dataclasses.replace(
+        base, timing=dataclasses.replace(base.timing, no_hand_timeout_ms=1000.0)
+    )
     rig = Rig(config)
     rig.aim()
     rig.feed(0.1, hand(CLOSED))
@@ -214,7 +222,7 @@ def test_the_app_releases_a_lost_drag_and_the_preview_says_no_hand() -> None:
 
     camera, stepped_window = lockstep(Camera(), window)
     run_preview(
-        Config(),
+        base_config(),
         camera,
         Script(lost_script),
         stepped_window,
@@ -252,7 +260,7 @@ def test_the_preview_says_pinch_then_drag_as_the_controller_presses_and_drags() 
 
     camera, stepped_window = lockstep(Camera(), window)
     run_preview(
-        Config(),
+        base_config(),
         camera,
         Script(lost_script),
         stepped_window,

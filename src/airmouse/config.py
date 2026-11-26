@@ -14,7 +14,7 @@ from typing import Any, cast
 
 DEFAULT_CONFIG_PATH = Path("~/.config/airmouse/config.toml")
 
-CONTROL_MODES = ("absolute",)
+CONTROL_MODES = ("relative", "absolute")
 ROTATIONS = (0, 90, 180, 270)
 
 
@@ -58,7 +58,57 @@ class ActiveRegionConfig:
 
 @dataclass(frozen=True)
 class ControlConfig:
-    mode: str = _bounded("absolute", choices=CONTROL_MODES)
+    """`relative` (the default) moves the cursor by the Pointer's movement, across all
+    displays; `absolute` maps the Active region to the main display (ADR 0002)."""
+
+    mode: str = _bounded("relative", choices=CONTROL_MODES)
+
+
+@dataclass(frozen=True)
+class RelativeConfig:
+    """Relative control mode: how far the cursor moves for a Pointer movement.
+
+    `gain` is display points per hand size of Pointer movement, so the feel is the
+    same near or far from the camera. `acceleration` adds gain as the Pointer speeds
+    up: the gain is `gain * (1 + acceleration * speed)`, speed in hand sizes per
+    second, so 0 means none. `max_gain` caps the gain however fast the hand moves.
+    """
+
+    gain: float = _bounded(800.0, low=1.0, high=20000.0)
+    acceleration: float = _bounded(0.5, low=0.0, high=10.0)
+    max_gain: float = _bounded(3000.0, low=1.0, high=50000.0)
+
+
+@dataclass(frozen=True)
+class ClutchConfig:
+    """The Fist clutch (relative mode): a Fist held for `debounce_ms` stops the cursor.
+
+    Each of the four fingers (index included) is scored from 0 (open) to 1 (curled)
+    by two measures, and the lower one counts, so both must agree a finger is curled:
+
+    - where its tip lies along the hand's axis (wrist to the middle finger's base),
+      past its own base, in hand sizes: `tip_curled` or less is curled (the tip has
+      folded back to the palm) and `tip_open` or more is open. A finger pointing at
+      the camera looks short, but its tip still lies beyond its base.
+    - wrist-to-tip over wrist-to-base distance: `finger_curled` or less is curled and
+      `finger_open` or more is open.
+
+    The finger curl is the least curled finger, so one finger out (the Pointer pose)
+    scores 0. The Fist score is the finger curl, except that a thumb tip closer than
+    `pinch_gap` hand sizes to the index tip (a Pinch) scores 0. The clutch counts at
+    `score_threshold` or more. While the finger curl is at `hold_threshold` or more
+    (the fingers may be closing into a Fist) the cursor holds still and the Preview
+    says HOLD; below it the cursor follows.
+    """
+
+    score_threshold: float = _bounded(0.6, low=0.0, high=1.0)
+    hold_threshold: float = _bounded(0.3, low=0.0, high=1.0)
+    tip_curled: float = _bounded(-0.15, low=-1.0, high=1.0)
+    tip_open: float = _bounded(0.0, low=-1.0, high=1.0)
+    finger_curled: float = _bounded(1.0, low=0.0, high=3.0)
+    finger_open: float = _bounded(1.4, low=0.0, high=3.0)
+    pinch_gap: float = _bounded(0.1, low=0.0, high=2.0)
+    debounce_ms: float = _bounded(100.0, low=0.0, high=2000.0)
 
 
 @dataclass(frozen=True)
@@ -114,6 +164,8 @@ class Config:
     pinch: PinchConfig = PinchConfig()
     timing: TimingConfig = TimingConfig()
     open_palm: OpenPalmConfig = OpenPalmConfig()
+    relative: RelativeConfig = RelativeConfig()
+    clutch: ClutchConfig = ClutchConfig()
 
 
 def _check_value(key: str, spec: dataclasses.Field[Any], value: Any) -> Any:
@@ -170,6 +222,15 @@ def _build(raw: Mapping[str, Any]) -> Config:
         raise ConfigError("open_palm.finger_curled: must be below open_palm.finger_extended")
     if palm.thumb_weight + palm.spread_weight >= 1:
         raise ConfigError("open_palm.thumb_weight: with open_palm.spread_weight must total below 1")
+    if config.relative.max_gain < config.relative.gain:
+        raise ConfigError("relative.max_gain: must be at least relative.gain")
+    clutch = config.clutch
+    if clutch.finger_curled >= clutch.finger_open:
+        raise ConfigError("clutch.finger_curled: must be below clutch.finger_open")
+    if clutch.tip_curled >= clutch.tip_open:
+        raise ConfigError("clutch.tip_curled: must be below clutch.tip_open")
+    if clutch.hold_threshold > clutch.score_threshold:
+        raise ConfigError("clutch.hold_threshold: must be at most clutch.score_threshold")
     return config
 
 

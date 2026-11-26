@@ -5,7 +5,7 @@ import numpy as np
 import pytest
 
 from airmouse.config import CameraConfig, Config
-from airmouse.controller import PalmReading, Phase, State
+from airmouse.controller import FistReading, PalmReading, Phase, State
 from airmouse.frame import active_region, prepare_point, prepared_frame_size
 from airmouse.gestures import Point, is_open_palm
 from airmouse.mapping import AbsoluteMapping, mapped_region
@@ -15,6 +15,7 @@ from airmouse.renderer import (
     CAMERA_ON_DOT,
     DEBUG_BAR_OFFSET,
     DEBUG_BAR_WIDTH,
+    DEBUG_FIST_TOP,
     DEBUG_LEFT,
     DEBUG_LINE,
     DEBUG_ROW,
@@ -41,6 +42,7 @@ from airmouse.renderer import (
     stage_for,
     to_canvas,
 )
+from anatomy import closing_fist, synthetic_hand
 from hands import open_hand, pinched, placed, pointing_hand
 from png import decode_png
 
@@ -112,6 +114,27 @@ def debug_cases() -> dict[str, Image]:
             fps=29.6,
             debug=DebugReadout(reading(0.34, 3.4, counts=False, steady=False), TIMINGS),
         ),
+        "debug_clutch": render_preview(
+            State.ACTIVE,
+            landmarks=FIST,
+            camera_on=True,
+            fps=29.8,
+            view=RELATIVE_VIEW,
+            clutch=True,
+            debug=DebugReadout(
+                reading(0.13, 0.4, counts=False, steady=True),
+                TIMINGS,
+                FistReading(
+                    score=0.97,
+                    threshold=0.6,
+                    counts=True,
+                    clutch=True,
+                    curl=0.97,
+                    hold_threshold=0.3,
+                    holding=False,
+                ),
+            ),
+        ),
         "debug_no_hand": render_preview(
             State.PAUSED,
             camera_on=True,
@@ -122,6 +145,9 @@ def debug_cases() -> dict[str, Image]:
 
 
 PINCHED = placed(pinched(pointing_hand(), 0.05), dy=-0.08)
+FIST = synthetic_hand("fist", centre=(0.5, 0.68))
+HALF_CLOSED = placed(closing_fist(0.6), dy=-0.07)
+RELATIVE_VIEW = FrameView(outline=False)  # relative mode: no Active region outline
 
 
 def state_cases() -> dict[str, Image]:
@@ -152,6 +178,17 @@ def state_cases() -> dict[str, Image]:
             camera_on=True,
             fps=30.0,
             view=view_for(90),
+        ),
+        "clutch": render_preview(
+            State.ACTIVE, landmarks=FIST, camera_on=True, fps=30.0, view=RELATIVE_VIEW, clutch=True
+        ),
+        "hold": render_preview(
+            State.ACTIVE,
+            landmarks=HALF_CLOSED,
+            camera_on=True,
+            fps=30.0,
+            view=RELATIVE_VIEW,
+            holding=True,
         ),
         "no_hand": render_preview(State.PAUSED, camera_on=True, fps=30.0),
         "no_hand_active": render_preview(State.ACTIVE, camera_on=True, fps=30.0, no_hand=True),
@@ -628,7 +665,15 @@ def test_every_state_has_a_render_of_its_own() -> None:
     renders = state_cases()
     labels = {
         name: label_band(renders[name]).tobytes()
-        for name in ("hand_paused", "hand_active", "pinching", "dragging", "no_hand_active")
+        for name in (
+            "hand_paused",
+            "hand_active",
+            "pinching",
+            "dragging",
+            "no_hand_active",
+            "clutch",
+            "hold",
+        )
     }
 
     assert len(set(labels.values())) == len(labels)
@@ -640,3 +685,114 @@ def test_rendering_is_repeatable() -> None:
     second = render_preview(State.PAUSED, 0.37, landmarks=open_hand(), camera_on=True, fps=30.0)
 
     assert first.pixels == second.pixels
+
+
+def test_the_clutch_says_so_and_only_the_label_differs_from_active() -> None:
+    active = render_preview(State.ACTIVE, landmarks=FIST, camera_on=True, fps=30.0)
+    clutch = render_preview(State.ACTIVE, landmarks=FIST, camera_on=True, fps=30.0, clutch=True)
+
+    assert clutch.pixels != active.pixels
+    top = LABEL_TOP * WIDTH * 3
+    assert clutch.pixels[:top] == active.pixels[:top]
+
+
+def test_paused_and_no_hand_outrank_the_clutch_and_a_clutch_shows_no_pinch() -> None:
+    paused = render_preview(State.PAUSED, 0.3, landmarks=PINCHED)
+    lost = render_preview(State.ACTIVE, no_hand=True)
+    clutched = render_preview(State.ACTIVE, landmarks=PINCHED, clutch=True)
+
+    assert render_preview(State.PAUSED, 0.3, landmarks=PINCHED, clutch=True).pixels == (
+        paused.pixels
+    )
+    assert render_preview(State.ACTIVE, no_hand=True, clutch=True).pixels == lost.pixels
+    for phase in (Phase.PRESSED, Phase.DRAGGING):
+        pressed = render_preview(State.ACTIVE, landmarks=PINCHED, clutch=True, phase=phase)
+        assert pressed.pixels == clutched.pixels
+
+
+def test_relative_mode_hides_the_active_region_outline_and_nothing_else() -> None:
+    outlined = render_preview(State.ACTIVE, camera_on=True)
+    hidden = render_preview(State.ACTIVE, camera_on=True, view=FrameView(outline=False))
+
+    assert REGION_PREVIEW in colours_in(outlined)
+    assert REGION_PREVIEW not in colours_in(hidden)
+    x, y = (int(v) for v in to_canvas((0.5, 0.5)))
+    assert hidden.get(x, y) == outlined.get(x, y) == BACKGROUND
+
+
+def fist_readout(score: float | None, *, counts: bool) -> DebugReadout:
+    fist = FistReading(score=score, threshold=0.6, counts=counts, clutch=False)
+    return DebugReadout(reading(0.1, 0.0, counts=False, steady=True), (), fist)
+
+
+def test_the_fist_bar_fills_in_proportion_with_a_tick_at_the_threshold() -> None:
+    bar_top = DEBUG_FIST_TOP + DEBUG_BAR_OFFSET
+    low = render_preview(State.ACTIVE, debug=fist_readout(0.25, counts=False))
+    high = render_preview(State.ACTIVE, debug=fist_readout(1.0, counts=True))
+
+    assert filled_width(low, bar_top, TEXT_PAUSED) == DEBUG_BAR_WIDTH // 4
+    assert filled_width(high, bar_top, TEXT_ACTIVE) == DEBUG_BAR_WIDTH - 1
+    assert low.get(BAR_LEFT + round(0.6 * DEBUG_BAR_WIDTH), bar_top + 2) == JOINT
+
+
+def test_the_fist_bar_is_below_the_palm_lines_and_empty_with_no_hand() -> None:
+    bar_top = DEBUG_FIST_TOP + DEBUG_BAR_OFFSET
+    without = render_preview(State.ACTIVE, debug=fist_readout(None, counts=False))
+    plain = render_preview(
+        State.ACTIVE, debug=DebugReadout(reading(0.1, 0.0, counts=False, steady=True))
+    )
+
+    assert DEBUG_FIST_TOP >= DEBUG_TOP + 2 * DEBUG_ROW + 2 * DEBUG_LINE
+    assert filled_width(without, bar_top, TEXT_PAUSED) == 0
+    assert filled_width(without, bar_top, TEXT_ACTIVE) == 0
+    assert without.pixels != plain.pixels  # the empty bar and its text are still drawn
+    top = DEBUG_FIST_TOP * WIDTH * 3
+    assert without.pixels[:top] == plain.pixels[:top]  # nothing above it changed
+
+
+def test_the_hold_says_so_and_only_the_label_differs_from_active() -> None:
+    active = render_preview(State.ACTIVE, landmarks=HALF_CLOSED, camera_on=True)
+    hold = render_preview(State.ACTIVE, landmarks=HALF_CLOSED, camera_on=True, holding=True)
+
+    assert hold.pixels != active.pixels
+    top = LABEL_TOP * WIDTH * 3
+    assert hold.pixels[:top] == active.pixels[:top]
+
+
+def test_paused_no_hand_and_the_clutch_outrank_the_hold() -> None:
+    def pair(state: State, *, no_hand: bool = False, clutch: bool = False) -> tuple[Image, Image]:
+        def draw(holding: bool) -> Image:
+            return render_preview(
+                state, landmarks=PINCHED, no_hand=no_hand, clutch=clutch, holding=holding
+            )
+
+        return draw(False), draw(True)
+
+    for plain, held in (
+        pair(State.PAUSED),
+        pair(State.ACTIVE, no_hand=True),
+        pair(State.ACTIVE, clutch=True),
+    ):
+        assert held.pixels == plain.pixels
+
+
+def test_the_curl_bar_shows_the_finger_curl_against_the_hold_threshold() -> None:
+    def curl_readout(curl: float, *, holding: bool) -> DebugReadout:
+        fist = FistReading(
+            score=0.0,
+            threshold=0.6,
+            counts=False,
+            clutch=False,
+            curl=curl,
+            hold_threshold=0.3,
+            holding=holding,
+        )
+        return DebugReadout(reading(0.1, 0.0, counts=False, steady=True), (), fist)
+
+    bar_top = DEBUG_FIST_TOP + DEBUG_ROW + DEBUG_BAR_OFFSET
+    low = render_preview(State.ACTIVE, debug=curl_readout(0.25, holding=False))
+    high = render_preview(State.ACTIVE, debug=curl_readout(1.0, holding=True))
+
+    assert filled_width(low, bar_top, TEXT_ACTIVE) == DEBUG_BAR_WIDTH // 4
+    assert filled_width(high, bar_top, TEXT_PAUSED) == DEBUG_BAR_WIDTH - 1
+    assert low.get(BAR_LEFT + round(0.3 * DEBUG_BAR_WIDTH), bar_top + 2) == JOINT

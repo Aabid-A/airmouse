@@ -9,7 +9,7 @@ import pytest
 
 from airmouse.app import DEFAULT_DISPLAY, camera_on_line, run_preview
 from airmouse.camera import CameraError
-from airmouse.config import CameraConfig, Config
+from airmouse.config import CameraConfig, Config, ControlConfig
 from airmouse.controller import State
 from airmouse.frame import active_region
 from airmouse.gestures import Landmarks
@@ -210,7 +210,8 @@ def test_the_default_preview_never_contains_camera_pixels() -> None:
 
 
 def test_the_preview_fits_the_prepared_frame_and_outlines_the_mapped_region() -> None:
-    config = Config(camera=CameraConfig(rotate=90))
+    # The outline is the Active region absolute mode maps through, so this asks for absolute.
+    config = Config(camera=CameraConfig(rotate=90), control=ControlConfig(mode="absolute"))
     window = FakeWindow(frames=1)
 
     run(FakeCamera(), window, config=config)
@@ -218,6 +219,20 @@ def test_the_preview_fits_the_prepared_frame_and_outlines_the_mapped_region() ->
     view = FrameView(480, 640, mapped_region(config, DEFAULT_DISPLAY))
     expected = render_preview(State.PAUSED, landmarks=open_hand(), camera_on=True, view=view)
     assert window.images[0].pixels == expected.pixels
+
+
+def test_relative_mode_draws_no_active_region_outline() -> None:
+    window = FakeWindow(frames=1)
+
+    run(FakeCamera(), window)  # the default control mode is relative
+
+    region = mapped_region(Config(), DEFAULT_DISPLAY)
+    hidden = FrameView(640, 480, region, outline=False)
+    shown = FrameView(640, 480, region)
+    expected = render_preview(State.PAUSED, landmarks=open_hand(), camera_on=True, view=hidden)
+    outlined = render_preview(State.PAUSED, landmarks=open_hand(), camera_on=True, view=shown)
+    assert window.images[0].pixels == expected.pixels
+    assert expected.pixels != outlined.pixels
 
 
 def test_the_camera_image_is_shown_only_with_the_opt_in_flag() -> None:

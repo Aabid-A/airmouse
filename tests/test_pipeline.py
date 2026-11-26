@@ -17,8 +17,9 @@ import pytest
 import airmouse.app
 from airmouse.app import DEFAULT_DISPLAY, STUCK_MESSAGE, run_live_preview, run_preview
 from airmouse.camera import CameraError
-from airmouse.config import Config
+from airmouse.config import Config, ControlConfig
 from airmouse.controller import Controller, State
+from airmouse.displays import Display
 from airmouse.frame import active_region
 from airmouse.gestures import Landmarks, Point
 from airmouse.mapping import make_cursor_path, mapped_region
@@ -26,11 +27,18 @@ from airmouse.output import OutputError
 from airmouse.pipeline import WORKER_NAME, LatestSlot, ShutdownOutput, Snapshot, Worker
 from airmouse.renderer import DebugReadout, Image
 from airmouse.tracker import TrackerError
+from anatomy import synthetic_hand
 from hands import open_hand, pointing_hand
 from lockstep import WAIT_S, ThreadClock, join_worker, lockstep
+from modes import base_config, clutch_for
 from test_pinch import AIM, Clock, RecordingOutput, Script, drag_script, hand
 
 FRAME_S = 1 / 30
+ABSOLUTE = Config(control=ControlConfig(mode="absolute"))
+RELATIVE = Config(control=ControlConfig(mode="relative"))
+
+# Every test here runs in both control modes (absolute explicitly, relative explicitly).
+pytestmark = pytest.mark.usefixtures("control_mode")
 
 
 def worker_thread() -> threading.Thread | None:
@@ -139,8 +147,14 @@ def make_worker(
     *,
     camera: Any = None,
     show_camera_image: bool = False,
+    config: Config | None = None,
+    outline_region: bool | None = None,
 ) -> tuple[Worker, LatestSlot[Snapshot]]:
-    config = Config()
+    """A Worker for `config` (default: the test's control mode), wired as `run_preview`
+    wires it: the clutch and no region outline in relative mode, the outline in absolute."""
+    config = config or base_config()
+    if outline_region is None:
+        outline_region = config.control.mode == "absolute"
     guarded = None if output is None else ShutdownOutput(output, io.StringIO())
     controller = (
         None
@@ -151,6 +165,7 @@ def make_worker(
             make_cursor_path(config, DEFAULT_DISPLAY),
             config.open_palm,
             config.pinch,
+            clutch_for(config),
         )
     )
     slot = LatestSlot[Snapshot]()
@@ -162,6 +177,7 @@ def make_worker(
         controller=controller,
         output=guarded,
         region=mapped_region(config, DEFAULT_DISPLAY),
+        outline_region=outline_region,
         show_camera_image=show_camera_image,
         clock=Clock(),
         timer=Clock(),
@@ -291,7 +307,7 @@ def test_a_blocked_preview_never_slows_the_cursor_path() -> None:
     window = BlockingWindow(output)
 
     run_preview(
-        Config(),
+        base_config(),
         FrameCamera(),
         Script(palm_then_pointing),
         window,
@@ -383,7 +399,7 @@ def test_a_stalled_camera_never_freezes_the_preview_and_it_invents_no_state() ->
     out = io.StringIO()
 
     status = run_preview(
-        Config(),
+        base_config(),
         camera,
         Script(lambda _: open_hand()),
         window,
@@ -414,7 +430,7 @@ def test_quitting_while_the_worker_is_stuck_mid_drag_lifts_the_button_once(
     out = io.StringIO()
 
     status = run_preview(
-        Config(),
+        base_config(),
         camera,
         Script(drag_script),
         window,
@@ -485,7 +501,7 @@ def test_a_worker_stuck_in_the_tracker_never_presses_after_shutdown() -> None:
     window = QuitWhenStuckWindow(tracker.stuck)
 
     status = run_preview(
-        Config(),
+        base_config(),
         camera,
         tracker,
         window,
@@ -529,7 +545,7 @@ def test_a_press_in_progress_at_shutdown_is_lifted_as_soon_as_it_returns() -> No
     window = QuitWhenStuckWindow(output.stuck)
 
     status = run_preview(
-        Config(),
+        base_config(),
         StallingCamera(frames=1000),
         Script(drag_script),
         window,
@@ -558,7 +574,7 @@ def test_on_a_normal_quit_only_the_worker_touches_the_output_and_the_tracker() -
     camera, stepped_window = lockstep(FrameCamera(), window)
 
     run_preview(
-        Config(),
+        base_config(),
         camera,
         tracker,
         stepped_window,
@@ -614,7 +630,7 @@ def test_a_worker_error_is_raised_on_the_main_thread_after_a_clean_stop(
 
     with pytest.raises(type(error), match=str(error)):
         run_preview(
-            Config(),
+            base_config(),
             FrameCamera(),
             FailingTracker(error, at=60),  # mid-drag
             EndlessWindow(),
@@ -673,7 +689,7 @@ def test_the_live_preview_turns_worker_errors_into_the_same_message_and_exit_sta
     monkeypatch.setattr(airmouse.app, "QuartzOutput", FakeQuartzOutput)
     monkeypatch.setattr(airmouse.app, "OpenCvWindow", EndlessWindow)
 
-    status = run_live_preview(Config())
+    status = run_live_preview(base_config())
 
     assert status == 1
     assert capsys.readouterr().err == f"airmouse: {message}\n"
@@ -697,7 +713,7 @@ def test_the_readout_has_worker_and_window_stages_and_both_rates(
     camera, window = lockstep(FrameCamera(), RecordingWindow(frames=5))
 
     run_preview(
-        Config(),
+        base_config(),
         camera,
         ListTracker(open_hand()),
         window,
@@ -728,7 +744,7 @@ def test_the_worker_thread_is_a_daemon_so_a_stuck_read_cannot_keep_the_process_a
             return super().quit_requested()
 
     run_preview(
-        Config(),
+        base_config(),
         camera,
         ListTracker(None),
         CheckingWindow(camera.stalled, checks=1),
@@ -764,3 +780,128 @@ def test_a_failing_lift_on_close_is_reported_not_raised() -> None:
     ShutdownOutput(output, out).close()
 
     assert "could not release the mouse button" in out.getvalue()
+
+
+# --- relative mode's reads (displays, cursor position) go through the ShutdownOutput ---
+
+
+class CountingScreen:
+    """A Screen that counts its reads."""
+
+    def __init__(self) -> None:
+        self.reads: list[str] = []
+
+    def displays(self) -> tuple[Display, ...]:
+        self.reads.append("displays")
+        return (Display(0, 0, 1440, 900), Display(1440, 0, 1920, 1080))
+
+    def cursor_position(self) -> Point | None:
+        self.reads.append("cursor")
+        return (100.0, 200.0)
+
+
+def test_the_shutdown_output_forwards_the_screen_reads_until_it_is_closed() -> None:
+    screen = CountingScreen()
+    guarded = ShutdownOutput(RecordingOutput(), io.StringIO(), screen)
+
+    assert guarded.displays() == screen.displays()
+    assert guarded.cursor_position() == (100.0, 200.0)
+    screen.reads.clear()
+
+    guarded.close()
+
+    assert guarded.displays() == ()
+    assert guarded.cursor_position() is None
+    assert screen.reads == []  # nothing reaches Quartz after shutdown
+
+
+def test_without_a_screen_the_reads_answer_unknown() -> None:
+    guarded = ShutdownOutput(RecordingOutput(), io.StringIO())
+
+    assert guarded.displays() == ()
+    assert guarded.cursor_position() is None
+
+
+def test_a_press_after_shutdown_is_still_ignored_with_relative_mode_reading_the_screen() -> None:
+    output = RecordingOutput()
+    screen = CountingScreen()
+    guarded = ShutdownOutput(output, io.StringIO(), screen)
+    config = RELATIVE
+    controller = Controller(
+        config.timing,
+        guarded,
+        make_cursor_path(config, DEFAULT_DISPLAY, guarded),
+        config.open_palm,
+        config.pinch,
+        config.clutch,
+    )
+    time = 0.0
+    for landmarks in [open_hand()] * 30 + [hand(AIM)] * 6 + [hand(0.1)] * 3:
+        controller.update(time, landmarks)
+        time += FRAME_S
+    assert controller.state is State.ACTIVE
+    assert "move" in output.kinds()
+
+    guarded.close()
+    output.events.clear()
+    screen.reads.clear()
+    for step in range(12):  # the pinch moves into a drag, then opens: a press would follow
+        controller.update(time, hand(0.1, dx=0.02 * step))
+        time += FRAME_S
+    controller.update(time, hand(0.6))
+
+    assert output.events == []
+    assert screen.reads == []
+
+
+def test_the_snapshot_carries_the_clutch_and_the_fist_reading() -> None:
+    tracker = ListTracker(open_hand())
+    worker, _ = make_worker(tracker, RecordingOutput(), config=RELATIVE)
+    for _ in range(30):
+        worker.step()
+    tracker.landmarks = synthetic_hand("fist")
+
+    snapshots = [worker.step() for _ in range(6)]
+
+    status = snapshots[-1].controller if snapshots[-1] is not None else None
+    assert status is not None
+    assert status.state is State.ACTIVE
+    assert status.clutch
+    assert status.fist is not None and status.fist.counts and status.fist.clutch
+    first = snapshots[0].controller if snapshots[0] is not None else None
+    assert first is not None and not first.clutch  # not before the debounce
+
+
+def test_relative_mode_snapshots_do_not_outline_the_region_and_absolute_ones_do() -> None:
+    relative, _ = make_worker(ListTracker(open_hand()), RecordingOutput(), config=RELATIVE)
+    absolute, _ = make_worker(ListTracker(open_hand()), RecordingOutput(), config=ABSOLUTE)
+
+    relative_view = relative.step()
+    absolute_view = absolute.step()
+
+    assert relative_view is not None and not relative_view.view.outline
+    assert absolute_view is not None and absolute_view.view.outline
+
+
+def test_a_worker_draws_no_region_outline_unless_asked() -> None:
+    config = ABSOLUTE
+    guarded = ShutdownOutput(RecordingOutput(), io.StringIO())
+    controller = Controller(
+        config.timing, guarded, make_cursor_path(config, DEFAULT_DISPLAY), config.open_palm
+    )
+    worker = Worker(
+        config,
+        FrameCamera(),
+        ListTracker(open_hand()),
+        LatestSlot[Snapshot](),
+        controller=controller,
+        output=guarded,
+        region=mapped_region(config, DEFAULT_DISPLAY),
+        show_camera_image=False,
+        clock=Clock(),
+        timer=Clock(),
+    )
+
+    snapshot = worker.step()
+
+    assert snapshot is not None and not snapshot.view.outline

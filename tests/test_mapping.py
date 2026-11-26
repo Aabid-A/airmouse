@@ -6,11 +6,13 @@ from airmouse.config import Config, ConfigError, ControlConfig, FilterConfig
 from airmouse.controller import Controller, State
 from airmouse.frame import prepare_point
 from airmouse.gestures import POINTER, Landmarks, Point
-from airmouse.mapping import make_cursor_path, make_mapping
+from airmouse.mapping import AbsolutePath, RelativePath, make_cursor_path, make_mapping
 from anatomy import synthetic_hand
 from hands import open_hand, pointing_hand
 
 FRAME_S = 1 / 30
+# These tests are about absolute control mode (no longer the default), so they ask for it.
+ABSOLUTE = Config(control=ControlConfig(mode="absolute"))
 DISPLAY = (1600.0, 1000.0)
 # The default Active region of a 640x480 frame on a 16:10 display: 60% of the width.
 LEFT, TOP, RIGHT, BOTTOM = 0.2, 0.25, 0.8, 0.75
@@ -44,10 +46,11 @@ def pointer_at(x: float, y: float) -> Landmarks:
 
 
 class Rig:
-    """A controller on a 1600x1000 display, fed at 30 fps; active unless told otherwise."""
+    """An absolute-mode controller on a 1600x1000 display, fed at 30 fps; active unless told
+    otherwise."""
 
     def __init__(self, config: Config | None = None, *, active: bool = True) -> None:
-        config = config or Config()
+        config = config or ABSOLUTE
         self.output = FakeOutput()
         self.controller = Controller(config.timing, self.output, make_cursor_path(config, DISPLAY))
         self.time = 0.0
@@ -209,7 +212,7 @@ def test_the_cursor_is_steady_when_the_hand_is_still_but_jittery() -> None:
 def test_the_cursor_keeps_up_with_a_fast_move() -> None:
     gaps = []
     for beta in (0.007, 0.0):
-        rig = Rig(Config(filter=FilterConfig(min_cutoff=1.0, beta=beta)))
+        rig = Rig(dataclasses.replace(ABSOLUTE, filter=FilterConfig(min_cutoff=1.0, beta=beta)))
         rig.feed(0.5, pointer_at(LEFT, 0.5))
         for step in range(1, 7):  # LEFT to RIGHT in 0.2 s
             rig.frame(pointer_at(LEFT + (RIGHT - LEFT) * step / 6, 0.5))
@@ -230,10 +233,15 @@ def test_the_cursor_reaches_the_target_once_the_pointer_settles() -> None:
 
 
 def test_an_unknown_control_mode_is_an_error_listing_the_valid_ones() -> None:
-    config = Config(control=ControlConfig(mode="relative"))
+    config = Config(control=ControlConfig(mode="joystick"))  # past the config check
 
-    with pytest.raises(ConfigError, match="relative.*absolute"):
-        make_mapping(config, DISPLAY)
+    with pytest.raises(ConfigError, match="control.mode.*joystick.*relative, absolute"):
+        make_cursor_path(config, DISPLAY)
+
+
+def test_each_control_mode_gets_its_own_cursor_path() -> None:
+    assert isinstance(make_cursor_path(ABSOLUTE, DISPLAY), AbsolutePath)
+    assert isinstance(make_cursor_path(Config(), DISPLAY), RelativePath)
 
 
 def test_a_close_fingered_open_hand_never_moves_the_cursor() -> None:

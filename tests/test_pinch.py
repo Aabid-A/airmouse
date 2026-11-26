@@ -17,6 +17,10 @@ from airmouse.output import OutputError, QuartzOutput
 from anatomy import synthetic_hand
 from hands import open_hand, pinched, placed, pointing_hand
 from lockstep import WAIT_S, lockstep
+from modes import base_config, clutch_for
+
+# Every test here runs in both control modes (absolute explicitly, relative explicitly).
+pytestmark = pytest.mark.usefixtures("control_mode")
 
 FRAME_S = 1 / 30
 DISPLAY = (1600.0, 1000.0)
@@ -70,7 +74,7 @@ class Rig:
     """A controller on a 1600x1000 display, fed at 30 fps; active unless told otherwise."""
 
     def __init__(self, config: Config | None = None, *, active: bool = True) -> None:
-        config = config or Config()
+        config = config or base_config()
         self.output = RecordingOutput()
         self.controller = Controller(
             config.timing,
@@ -78,6 +82,7 @@ class Rig:
             make_cursor_path(config, DISPLAY),
             config.open_palm,
             config.pinch,
+            clutch_for(config),
         )
         self.time = 0.0
         if active:
@@ -130,7 +135,7 @@ def test_the_latch_keeps_its_answer_when_the_hand_cannot_be_measured() -> None:
 
 def test_the_thresholds_come_from_config() -> None:
     config = dataclasses.replace(
-        Config(), pinch=PinchConfig(close_threshold=0.1, open_threshold=0.2)
+        base_config(), pinch=PinchConfig(close_threshold=0.1, open_threshold=0.2)
     )
     rig = Rig(config)
     rig.output.events.clear()
@@ -203,7 +208,7 @@ def test_a_pinch_held_without_moving_past_the_click_window_is_no_click() -> None
 
 
 def test_the_click_window_comes_from_config() -> None:
-    config = dataclasses.replace(Config(), pinch=PinchConfig(click_window_ms=1000.0))
+    config = dataclasses.replace(base_config(), pinch=PinchConfig(click_window_ms=1000.0))
     rig = Rig(config)
     rig.aim()
 
@@ -391,7 +396,7 @@ def run_app(
 ) -> int:
     camera, stepped_window = lockstep(Camera(), window)
     return run_preview(
-        Config(),
+        base_config(),
         camera,
         Script(script),
         stepped_window,
