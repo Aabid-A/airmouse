@@ -26,11 +26,11 @@ How hand position becomes cursor movement, selected by `control.mode`. **Relativ
 _Avoid_: Input mode, tracking mode
 
 **Clutch**:
-The state in which the Hand's movement is ignored, so the hand can be moved back without moving the cursor, like lifting a mouse. Entered by holding a Fist for about 100 ms, or by the Hand leaving the frame (No hand); a held drag is released. The cursor never jumps when following resumes. The Preview says CLUTCH.
+Relative mode: the state in which the Hand's movement is ignored, so the hand can be moved back without moving the cursor, like lifting a mouse. Entered by holding a Fist for about 100 ms; a held drag is released, and the Preview says CLUTCH. No hand also holds the cursor still and resumes without a jump, but it is its own state and the Preview says NO HAND. While the fingers are only curling towards a Fist the cursor also holds still, and the Preview says HOLD. The cursor never jumps when following resumes.
 _Avoid_: Freeze, hold-off
 
 **Fist**:
-All four fingers curled into the palm, the index included; the thumb is free, but a thumb tip on the index tip is a Pinch, never a Fist. Scored from 0 to 1 against a threshold (`[clutch]`). Held, it is the clutch.
+All four fingers curled into the palm, the index included: each fingertip folded back past its own base along the hand's axis. The thumb is free (beside the fingers or tucked over them), but a thumb tip right on the index tip is a Pinch, never a Fist. Scored from 0 to 1 against a threshold (`[clutch]`). Held, it is the clutch (relative mode only).
 _Avoid_: Grab
 
 **Gesture**:
@@ -78,5 +78,5 @@ Everything from the camera to the cursor: camera read, frame preparation, the Ha
 _Avoid_: Pipeline (ambiguous), backend
 
 **Snapshot**:
-The cursor path's latest state, copied and immutable, that the Preview draws: the Hand, the Controller's state, phase and Hold ring, No hand, the clutch, the debug readings and timings. Only the newest one is kept.
+The cursor path's latest state, copied and immutable, that the Preview draws: the Hand, the Controller's state, phase and Hold ring, No hand, the clutch and the hold, the debug readings and timings. Only the newest one is kept.
 _Avoid_: Frame (a camera image), message, event

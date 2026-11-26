@@ -81,20 +81,33 @@ class RelativeConfig:
 
 @dataclass(frozen=True)
 class ClutchConfig:
-    """The Fist clutch: a closed fist held for `debounce_ms` stops the cursor following.
+    """The Fist clutch (relative mode): a Fist held for `debounce_ms` stops the cursor.
 
-    Each of the four fingers (index included) is measured as wrist-to-tip over
-    wrist-to-base distance: `finger_curled` or less counts as fully curled (1) and
-    `finger_open` or more as open (0), a straight line between. The Fist score is the
-    least curled finger, so one finger out (the Pointer pose) scores 0. The clutch
-    counts at `score_threshold` or more. A thumb tip closer than `pinch_gap` hand
-    sizes to the index tip is a Pinch, never a Fist.
+    Each of the four fingers (index included) is scored from 0 (open) to 1 (curled)
+    by two measures, and the lower one counts, so both must agree a finger is curled:
+
+    - where its tip lies along the hand's axis (wrist to the middle finger's base),
+      past its own base, in hand sizes: `tip_curled` or less is curled (the tip has
+      folded back to the palm) and `tip_open` or more is open. A finger pointing at
+      the camera looks short, but its tip still lies beyond its base.
+    - wrist-to-tip over wrist-to-base distance: `finger_curled` or less is curled and
+      `finger_open` or more is open.
+
+    The finger curl is the least curled finger, so one finger out (the Pointer pose)
+    scores 0. The Fist score is the finger curl, except that a thumb tip closer than
+    `pinch_gap` hand sizes to the index tip (a Pinch) scores 0. The clutch counts at
+    `score_threshold` or more. While the finger curl is at `hold_threshold` or more
+    (the fingers may be closing into a Fist) the cursor holds still and the Preview
+    says HOLD; below it the cursor follows.
     """
 
     score_threshold: float = _bounded(0.6, low=0.0, high=1.0)
+    hold_threshold: float = _bounded(0.3, low=0.0, high=1.0)
+    tip_curled: float = _bounded(-0.15, low=-1.0, high=1.0)
+    tip_open: float = _bounded(0.0, low=-1.0, high=1.0)
     finger_curled: float = _bounded(1.0, low=0.0, high=3.0)
     finger_open: float = _bounded(1.4, low=0.0, high=3.0)
-    pinch_gap: float = _bounded(0.3, low=0.0, high=2.0)
+    pinch_gap: float = _bounded(0.1, low=0.0, high=2.0)
     debounce_ms: float = _bounded(100.0, low=0.0, high=2000.0)
 
 
@@ -211,8 +224,13 @@ def _build(raw: Mapping[str, Any]) -> Config:
         raise ConfigError("open_palm.thumb_weight: with open_palm.spread_weight must total below 1")
     if config.relative.max_gain < config.relative.gain:
         raise ConfigError("relative.max_gain: must be at least relative.gain")
-    if config.clutch.finger_curled >= config.clutch.finger_open:
+    clutch = config.clutch
+    if clutch.finger_curled >= clutch.finger_open:
         raise ConfigError("clutch.finger_curled: must be below clutch.finger_open")
+    if clutch.tip_curled >= clutch.tip_open:
+        raise ConfigError("clutch.tip_curled: must be below clutch.tip_open")
+    if clutch.hold_threshold > clutch.score_threshold:
+        raise ConfigError("clutch.hold_threshold: must be at most clutch.score_threshold")
     return config
 
 

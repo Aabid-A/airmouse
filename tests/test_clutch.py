@@ -34,7 +34,7 @@ from airmouse.renderer import (
     TEXT_ACTIVE,
     render_preview,
 )
-from anatomy import POSES, closing_fist, fist_sequence, synthetic_hand
+from anatomy import POSES, bent_pointer, closing_fist, fist_sequence, synthetic_hand, tucked_fist
 from hands import open_hand, pinched, placed, pointing_hand
 from lockstep import lockstep
 from test_app import FakeCamera, FakeWindow
@@ -110,7 +110,7 @@ class Rig:
             make_cursor_path(config, (1440.0, 900.0), self.mac),
             config.open_palm,
             config.pinch,
-            config.clutch,
+            config.clutch if config.control.mode == "relative" else None,  # as the app does
         )
         self.frame_number = 0
         if active:
@@ -183,7 +183,7 @@ def test_a_thumb_on_the_index_tip_is_a_pinch_never_a_fist() -> None:
     hand = list(synthetic_hand("fist"))
     assert finger_curl(hand) == 1.0
     size = math.dist(hand[0], hand[9])
-    hand[4] = (hand[8][0] + 0.1 * size, hand[8][1])
+    hand[4] = (hand[8][0] + 0.05 * size, hand[8][1])
 
     assert fist_score(hand) == 0.0
 
@@ -228,6 +228,7 @@ def test_a_fist_held_past_the_debounce_is_the_clutch() -> None:
     assert held[: DEBOUNCE_FRAMES - 1] == [False] * (DEBOUNCE_FRAMES - 1)
     assert held[-1]
     reading = rig.controller.fist_reading
+    assert reading is not None
     assert reading.counts and reading.clutch
     assert reading.score == pytest.approx(1.0)
     assert reading.threshold == CLUTCH.score_threshold
@@ -530,7 +531,9 @@ def test_an_open_palm_still_pauses_and_releases_a_drag_in_relative_mode() -> Non
     assert rig.mac.events == []
 
 
-def test_the_clutch_works_the_same_in_absolute_mode() -> None:
+def test_absolute_mode_has_no_clutch_and_a_fist_moves_the_cursor_as_before() -> None:
+    """Absolute mode is unchanged: the hand's position is the cursor, so there is nothing
+    to clutch, and none of the relative-mode guards apply."""
     rig = Rig(Config(control=ControlConfig(mode="absolute")))
     rig.feed(0.3, fist())
     rig.mac.events.clear()
@@ -538,8 +541,10 @@ def test_the_clutch_works_the_same_in_absolute_mode() -> None:
     for step in range(10):
         rig.frame(fist(dx=0.01 * step))
 
-    assert rig.controller.clutch
-    assert rig.mac.events == []
+    assert not rig.controller.clutch
+    assert not rig.controller.holding
+    assert rig.controller.fist_reading is None
+    assert rig.mac.kinds() == ["move"] * 10
 
 
 def test_the_anatomy_poses_are_left_as_they_were() -> None:
@@ -599,3 +604,98 @@ def test_the_debug_readout_shows_the_fist_bar_counting() -> None:
     bar_row = DEBUG_FIST_TOP + DEBUG_BAR_OFFSET + 2
     row = range(DEBUG_LEFT, DEBUG_LEFT + DEBUG_BAR_WIDTH)
     assert any(image.get(x, bar_row) == TEXT_ACTIVE for x in row)
+
+
+# --- a Pointer pose held at an angle to the camera is a Pointer, not a Fist ---
+
+
+TILTED_POINTERS = [
+    pytest.param(bend, pitch, id=f"{bend}-{pitch:+.0f}")
+    for bend, pitches in (
+        ((4.0, 6.0, 4.0), (-20.0, 0.0, 20.0, 40.0, 60.0)),
+        ((15.0, 20.0, 10.0), (-20.0, 0.0, 20.0, 40.0, 60.0)),
+        ((25.0, 30.0, 15.0), (-20.0, 0.0, 20.0, 40.0)),
+        ((35.0, 45.0, 25.0), (-20.0, 0.0, 20.0)),
+    )
+    for pitch in pitches
+]
+
+
+@pytest.mark.parametrize(("bend", "pitch"), TILTED_POINTERS)
+def test_a_tilted_or_bent_pointer_never_clutches_holds_or_stops_the_cursor(
+    bend: tuple[float, float, float], pitch: float
+) -> None:
+    rig = Rig()
+    start = (0.5, 0.75)
+    rig.feed(0.2, bent_pointer(bend, pitch=pitch, centre=start))
+    rig.mac.events.clear()
+    before = rig.mac.cursor
+
+    for frame in range(30):
+        centre = (start[0] + 0.004 * frame, start[1])
+        rig.frame(bent_pointer(bend, pitch=pitch, centre=centre, jitter=0.002, seed=frame))
+        assert not rig.controller.clutch
+        assert not rig.controller.holding
+
+    assert rig.mac.kinds() == ["move"] * 30
+    assert rig.mac.cursor[0] > before[0] + 200
+
+
+@pytest.mark.parametrize("pitch", [-30.0, -20.0, 0.0, 20.0, 30.0])
+@pytest.mark.parametrize("thumb", ["free", "tucked 0.15", "tucked 0.25"])
+def test_a_fist_clutches_with_the_thumb_free_or_tucked(pitch: float, thumb: str) -> None:
+    def make(seed: int) -> Landmarks:
+        if thumb == "free":
+            return synthetic_hand("fist", pitch=pitch, jitter=0.002, seed=seed)
+        return tucked_fist(float(thumb.split()[1]), pitch=pitch, jitter=0.002, seed=seed)
+
+    rig = Rig()
+    held = rig.play([make(seed) for seed in range(DEBOUNCE_FRAMES + 3)])
+
+    assert held[-1]
+
+
+def test_the_hold_shows_while_the_fingers_curl_and_ends_when_the_clutch_takes_over() -> None:
+    rig = Rig()
+    hands = fist_sequence()
+
+    holding, clutched = [], []
+    for hand in hands:
+        rig.frame(hand)
+        holding.append(rig.controller.holding)
+        clutched.append(rig.controller.clutch)
+
+    assert any(holding[:13])  # while closing, before the clutch
+    assert not any(h and c for h, c in zip(holding, clutched, strict=True))
+    assert not holding[-1] and not clutched[-1]  # open again: following
+    reading = rig.controller.fist_reading
+    assert reading is not None and reading.hold_threshold == CLUTCH.hold_threshold
+
+
+def test_the_hold_threshold_comes_from_config() -> None:
+    half_closed = closing_fist(0.6)
+    curl = finger_curl(half_closed)
+    assert 0 < curl < 1
+
+    for threshold, held in ((curl / 2, True), (min(1.0, curl + 0.05), False)):
+        clutch = dataclasses.replace(CLUTCH, hold_threshold=threshold, score_threshold=1.0)
+        rig = Rig(Config(clutch=clutch))
+        rig.feed(0.2, half_closed)
+        assert rig.controller.holding is held
+
+
+def test_after_a_click_with_the_other_fingers_curled_the_cursor_follows_at_once() -> None:
+    rig = Rig()
+    aim = synthetic_hand("pinch fingers curled")
+    open_pinch = pinched(aim, 0.8)  # the same hand with the thumb away: a Pointer pose
+    rig.feed(0.3, open_pinch)
+    rig.feed(0.1, aim)
+    rig.frame(open_pinch)
+    assert rig.mac.kinds()[-2:] == ["press", "release"]
+    rig.mac.events.clear()
+
+    for step in range(1, 8):
+        rig.frame(placed(open_pinch, dx=0.01 * step))
+
+    assert not rig.controller.holding
+    assert rig.mac.kinds() == ["move"] * 7

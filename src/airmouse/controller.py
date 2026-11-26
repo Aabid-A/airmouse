@@ -20,20 +20,26 @@ from its new position (the filter starts afresh, so it does not glide from the o
 spot), but a Hand that returns still pinched must open its Pinch before a click or
 drag can start, so losing the Hand never presses the button.
 
-A Fist (all four fingers curled) held for `clutch.debounce_ms` is the clutch: while
-it is held the cursor does not follow, no click or drag can start, and a held drag
-is released. The Hand leaving the frame (No hand) is a clutch too. The clutch has
-priority over the Pinch, because closing a fist moves the index towards the thumb:
+In relative control mode (when the Controller is given a `ClutchConfig`) a Fist (all
+four fingers curled) held for `clutch.debounce_ms` is the clutch: while it is held
+the cursor does not follow, no click or drag can start, and a held drag is released.
+The Hand leaving the frame (No hand) also stops the cursor, shown as No hand. The
+clutch has priority over the Pinch, because closing a fist moves the index towards
+the thumb:
 
-- while the fingers are curling (curled at all, but not yet a clutch) the cursor
-  holds still, and that movement is dropped;
+- while the finger curl is at `clutch.hold_threshold` or more (the fingers may be
+  closing into a Fist) the cursor holds still (HOLD in the Preview), and that
+  movement is dropped;
 - a closed but undecided Pinch is cancelled (no click) on the first frame that reads
-  as a Fist or once the fingers have curled further since it closed, and a drag only
-  starts when the whole hand moves, not just the curling fingertip;
-- after a clutch, as after No hand, the Pinch must open and the fingers must open
-  fully again before the cursor follows or a Pinch can click.
+  as a Fist, or once the index tip has folded back towards the palm since it closed,
+  and a drag only starts when the whole hand moves, not just the curling fingertip;
+- after a clutch, as after No hand, the Pinch must open and the finger curl must fall
+  below the hold threshold before the cursor follows or a Pinch can click (HOLD), and
+  a Pinch that closes within `REOPEN_S` of the clutch ending is ignored.
 
 Following resumes from where the cursor is, with no movement on the first frame.
+Without a `ClutchConfig` (absolute mode) none of this applies: the behaviour is
+exactly that of absolute mode before relative mode existed.
 """
 
 from dataclasses import dataclass
@@ -53,6 +59,7 @@ from airmouse.gestures import (
     finger_curl,
     fist_score,
     hand_size,
+    index_reach,
     open_palm_score,
     pinch_ratio,
 )
@@ -66,9 +73,13 @@ SPEED_SMOOTHING = 0.3
 # the Pinch closed) is still a click; further and it is a drag.
 CLICK_TOLERANCE = 0.15
 
-# A closed Pinch during which the fingers curl this much further (the finger curl,
-# 0 to 1) is a Fist forming, not a click or a drag: it is cancelled.
-FIST_FORMING = 0.25
+# A closed Pinch during which the index tip folds this far back towards the palm (in
+# hand sizes, along the hand's axis) is a Fist forming, not a click or a drag.
+FIST_FORMING = 0.3
+
+# A Pinch that closes within this many seconds after a clutch ends is the hand opening
+# out of the Fist (the index passing the thumb), not a click.
+REOPEN_S = 0.3
 
 
 @dataclass(frozen=True)
@@ -91,6 +102,9 @@ class FistReading:
     threshold: float
     counts: bool  # the score reaches the threshold this frame
     clutch: bool  # the clutch is held (the score has counted for the debounce)
+    curl: float | None = None  # the finger curl, None with no Hand
+    hold_threshold: float = 0.0
+    holding: bool = False  # the cursor is held still while the fingers are curled
 
 
 class State(Enum):
@@ -131,11 +145,14 @@ class Controller:
         clutch: ClutchConfig | None = None,
     ) -> None:
         self._timing = timing
-        self._clutch_config = clutch or ClutchConfig()
+        self._clutch_config = clutch  # None: no clutch (absolute mode)
         self._fist: float | None = None  # Fist score this frame, None with no Hand
         self._curl = 0.0  # how curled the fingers are, ignoring the thumb
         self._fist_since: float | None = None  # start of the current Fist run
         self._clutched = False  # the Fist clutch is held
+        self._holding = False  # the cursor is held still while the fingers are curled
+        self._unclutched_at: float | None = None  # when the last clutch ended
+        self._reach: float | None = None  # how far the index reaches past its base
         self._pinch_config = pinch or PinchConfig()
         self._pinch = PinchLatch(self._pinch_config)
         self._ratio: float | None = None
@@ -144,7 +161,7 @@ class Controller:
         self._pressed_at = 0.0
         self._pressed_pointer: Point = (0.0, 0.0)
         self._pressed_base: Point = (0.0, 0.0)  # the index finger's base when the Pinch closed
-        self._pressed_curl = 0.0  # the finger curl when the Pinch closed
+        self._pressed_reach: float | None = None  # the index reach when the Pinch closed
         self._palm = open_palm or OpenPalmConfig()
         self._score: float | None = None
         self._speed: float | None = None
@@ -186,15 +203,26 @@ class Controller:
         return self._clutched and self.state is State.ACTIVE
 
     @property
-    def fist_reading(self) -> FistReading:
-        """The latest frame's Fist score against the clutch threshold."""
-        threshold = self._clutch_config.score_threshold
+    def holding(self) -> bool:
+        """True while the cursor is held still because the fingers are curled (active)."""
+        return self._holding and self.state is State.ACTIVE and not self.no_hand
+
+    @property
+    def fist_reading(self) -> FistReading | None:
+        """The latest frame's Fist score and finger curl against their thresholds, or None
+        without a clutch (absolute mode)."""
+        config = self._clutch_config
+        if config is None:
+            return None
         score = self._fist
         return FistReading(
             score=score,
-            threshold=threshold,
-            counts=score is not None and score >= threshold,
+            threshold=config.score_threshold,
+            counts=score is not None and score >= config.score_threshold,
             clutch=self.clutch,
+            curl=None if score is None else self._curl,
+            hold_threshold=config.hold_threshold,
+            holding=self.holding,
         )
 
     @property
@@ -225,6 +253,7 @@ class Controller:
             return
         self._fist_since = None
         self._clutched = False  # an Open palm is never a Fist
+        self._holding = False
         if self._latched:
             return
         if self._palm_since is None:
@@ -258,19 +287,22 @@ class Controller:
     def _track_clutch(self, landmarks: Landmarks | None) -> None:
         """Time the Fist; a Fist cancels an undecided Pinch at once and clutches after the
         debounce. A short dropout (no landmarks) changes nothing."""
-        if landmarks is None:
+        config = self._clutch_config
+        if config is None or landmarks is None:
             return
         reading = self.fist_reading
-        if not reading.counts:
+        if reading is None or not reading.counts:
             self._fist_since = None
-            self._clutched = False
+            if self._clutched:
+                self._clutched = False
+                self._unclutched_at = self._now
             return
         if self._phase is Phase.PRESSED:
             self._phase = Phase.IDLE  # a Fist is never a Pinch: cancel it, no click
             self._must_open = True
         if self._fist_since is None:
             self._fist_since = self._now
-        debounce = self._clutch_config.debounce_ms / 1000
+        debounce = config.debounce_ms / 1000
         if not self._clutched and self._now - self._fist_since >= debounce:
             self._clutched = True
             if self._phase is not Phase.IDLE:
@@ -294,17 +326,18 @@ class Controller:
             return
         if landmarks is None:
             return  # a short dropout (or No hand): nothing moves, nothing is released here
-        if self._clutched or self._must_open:
-            if self._clutched or self._pinch.closed or self._curl > 0:
-                # Clutched, or back from a clutch or No hand still pinched or curled: wait,
-                # and drop any movement, so following resumes without a jump.
-                self._cursor.reset()
+        if self._clutch_config is None:
+            position = self._cursor.position(self._now, landmarks)
+            if self._must_open:
+                if self._pinch.closed:
+                    return  # back from No hand still pinched: wait for it to open
+                self._must_open = False
+        else:
+            self._holding = self._waiting(self._clutch_config) and not self._clutched
+            if self._clutched or self._holding:
+                self._cursor.reset()  # drop any movement, so following resumes without a jump
                 return
-            self._must_open = False
-        if self._phase is Phase.IDLE and self._curl > 0 and not self._pinch.closed:
-            self._cursor.reset()  # the fingers are curling, maybe into a Fist: hold still
-            return
-        position = self._cursor.position(self._now, landmarks)
+            position = self._cursor.position(self._now, landmarks)
         if self._frozen is None:
             self._frozen = position
         if self._phase is Phase.IDLE:
@@ -314,14 +347,29 @@ class Controller:
         else:
             self._drag(position)
 
+    def _waiting(self, config: ClutchConfig) -> bool:
+        """Clutched, or the fingers are curled (maybe closing into a Fist), or back from a
+        clutch or No hand still pinched or curled: the cursor must not follow."""
+        curled = self._curl >= config.hold_threshold
+        if self._clutched:
+            return True
+        if self._must_open:
+            if self._pinch.closed or curled:
+                return True
+            self._must_open = False
+        return self._phase is Phase.IDLE and curled and not self._pinch.closed
+
     def _aim(self, position: Point, landmarks: Landmarks) -> None:
         """No Pinch yet: follow the Pointer, but freeze once a Pinch starts to form."""
         if self._pinch.closed:
+            if self._reopening():
+                self._must_open = True  # the index passing the thumb as the fist opens
+                return
             self._phase = Phase.PRESSED
             self._pressed_at = self._now
             self._pressed_pointer = landmarks[POINTER]
             self._pressed_base = landmarks[INDEX_MCP]
-            self._pressed_curl = self._curl
+            self._pressed_reach = self._reach
         elif self._ratio is None or self._ratio >= self._pinch_config.open_threshold:
             self._frozen = position
             self._output.move_cursor(*position)
@@ -329,8 +377,8 @@ class Controller:
     def _decide(self, position: Point, landmarks: Landmarks) -> None:
         """A closed Pinch: released in time without moving is a click; moving makes it a drag."""
         frozen = self._frozen or position
-        if self._curl > self._pressed_curl + FIST_FORMING:
-            self._phase = Phase.IDLE  # the fingers are curling into a Fist: no click, no drag
+        if self._fist_forming():
+            self._phase = Phase.IDLE  # the index is curling into a Fist: no click, no drag
             self._must_open = True
             return
         if not self._pinch.closed:
@@ -340,17 +388,30 @@ class Controller:
                 self._output.release(*frozen)
             return
         size = hand_size(landmarks)
-        # The whole hand must move: a fingertip curling towards the palm (a Fist forming)
-        # moves the Pointer but not the index finger's base.
-        moved = min(
-            distance(landmarks[POINTER], self._pressed_pointer),
-            distance(landmarks[INDEX_MCP], self._pressed_base),
-        )
+        moved = distance(landmarks[POINTER], self._pressed_pointer)
+        if self._clutch_config is not None:
+            # The whole hand must move: a fingertip curling towards the palm (a Fist
+            # forming) moves the Pointer but not the index finger's base.
+            moved = min(moved, distance(landmarks[INDEX_MCP], self._pressed_base))
         if size > 0 and moved > CLICK_TOLERANCE * size:
             self._phase = Phase.DRAGGING
             self._output.press(*frozen)
             self._frozen = position
             self._output.drag_to(*position)
+
+    def _reopening(self) -> bool:
+        """With a clutch: the clutch ended less than `REOPEN_S` ago, so the hand is still
+        opening out of the Fist and a Pinch now is the index passing the thumb."""
+        ended = self._unclutched_at
+        return (
+            self._clutch_config is not None and ended is not None and self._now - ended < REOPEN_S
+        )
+
+    def _fist_forming(self) -> bool:
+        """With a clutch: the index tip has folded back towards the palm since the Pinch closed."""
+        if self._clutch_config is None or self._reach is None or self._pressed_reach is None:
+            return False
+        return self._reach < self._pressed_reach - FIST_FORMING
 
     def _drag(self, position: Point) -> None:
         if self._pinch.closed:
@@ -376,8 +437,12 @@ class Controller:
         """Score the Open palm, the Fist and the smoothed wrist speed for this frame."""
         self._score = None if landmarks is None else open_palm_score(landmarks, self._palm)
         clutch = self._clutch_config
-        self._fist = None if landmarks is None else fist_score(landmarks, clutch)
-        self._curl = 0.0 if landmarks is None else finger_curl(landmarks, clutch)
+        if clutch is None or landmarks is None:
+            self._fist, self._curl, self._reach = None, 0.0, None
+        else:
+            self._fist = fist_score(landmarks, clutch)
+            self._curl = finger_curl(landmarks, clutch)
+            self._reach = index_reach(landmarks)
         if self._pinch.closed and self._score is not None:
             self._score = 0.0  # a closed Pinch never counts as an Open palm
         if landmarks is None or len(landmarks) != LANDMARK_COUNT or hand_size(landmarks) <= 0:

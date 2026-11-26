@@ -292,3 +292,35 @@ def fist_sequence(
         closing_fist(fraction, start=start, brush=brush, pitch=pitch, jitter=jitter, seed=frame)
         for frame, fraction in enumerate(fractions)
     ]
+
+
+def bent_pointer(
+    bend: Bend,
+    *,
+    pitch: float = 0.0,
+    centre: Point = (0.5, 0.75),
+    jitter: float = 0.0,
+    seed: int = 0,
+) -> Landmarks:
+    """The "pointing" pose with the index bent by `bend` (degrees at its three joints):
+    an ordinary Pointer pose, not held perfectly straight."""
+    pointing = POSES["pointing"]
+    pose = Pose(pointing.fan, {**pointing.bend, "index": bend}, pointing.thumb_angles, 45.0)
+    return seen_hand(pose, pitch=pitch, centre=centre, jitter=jitter, seed=seed)
+
+
+def tucked_fist(
+    gap: float,
+    *,
+    pitch: float = 0.0,
+    centre: Point = (0.5, 0.75),
+    jitter: float = 0.0,
+    seed: int = 0,
+) -> Landmarks:
+    """A fist whose thumb is tucked over the curled index, its tip `gap` hand sizes from
+    the index tip."""
+    hand = list(seen_hand(POSES["fist"], pitch=pitch, centre=centre, jitter=jitter, seed=seed))
+    size = math.dist(hand[0], hand[9])
+    tip = hand[8]
+    hand[4] = (tip[0] - gap * size * 0.6, tip[1] - gap * size * 0.8)
+    return hand

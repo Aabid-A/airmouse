@@ -30,10 +30,15 @@ from airmouse.tracker import TrackerError
 from anatomy import synthetic_hand
 from hands import open_hand, pointing_hand
 from lockstep import WAIT_S, ThreadClock, join_worker, lockstep
+from modes import base_config, clutch_for
 from test_pinch import AIM, Clock, RecordingOutput, Script, drag_script, hand
 
 FRAME_S = 1 / 30
 ABSOLUTE = Config(control=ControlConfig(mode="absolute"))
+RELATIVE = Config(control=ControlConfig(mode="relative"))
+
+# Every test here runs in both control modes (absolute explicitly, relative explicitly).
+pytestmark = pytest.mark.usefixtures("control_mode")
 
 
 def worker_thread() -> threading.Thread | None:
@@ -143,10 +148,13 @@ def make_worker(
     camera: Any = None,
     show_camera_image: bool = False,
     config: Config | None = None,
-    outline_region: bool = False,
+    outline_region: bool | None = None,
 ) -> tuple[Worker, LatestSlot[Snapshot]]:
-    """A Worker for `config` (default: relative mode, so no region outline unless asked)."""
-    config = config or Config()
+    """A Worker for `config` (default: the test's control mode), wired as `run_preview`
+    wires it: the clutch and no region outline in relative mode, the outline in absolute."""
+    config = config or base_config()
+    if outline_region is None:
+        outline_region = config.control.mode == "absolute"
     guarded = None if output is None else ShutdownOutput(output, io.StringIO())
     controller = (
         None
@@ -157,7 +165,7 @@ def make_worker(
             make_cursor_path(config, DEFAULT_DISPLAY),
             config.open_palm,
             config.pinch,
-            config.clutch,
+            clutch_for(config),
         )
     )
     slot = LatestSlot[Snapshot]()
@@ -299,7 +307,7 @@ def test_a_blocked_preview_never_slows_the_cursor_path() -> None:
     window = BlockingWindow(output)
 
     run_preview(
-        Config(),
+        base_config(),
         FrameCamera(),
         Script(palm_then_pointing),
         window,
@@ -391,7 +399,7 @@ def test_a_stalled_camera_never_freezes_the_preview_and_it_invents_no_state() ->
     out = io.StringIO()
 
     status = run_preview(
-        Config(),
+        base_config(),
         camera,
         Script(lambda _: open_hand()),
         window,
@@ -422,7 +430,7 @@ def test_quitting_while_the_worker_is_stuck_mid_drag_lifts_the_button_once(
     out = io.StringIO()
 
     status = run_preview(
-        Config(),
+        base_config(),
         camera,
         Script(drag_script),
         window,
@@ -493,7 +501,7 @@ def test_a_worker_stuck_in_the_tracker_never_presses_after_shutdown() -> None:
     window = QuitWhenStuckWindow(tracker.stuck)
 
     status = run_preview(
-        Config(),
+        base_config(),
         camera,
         tracker,
         window,
@@ -537,7 +545,7 @@ def test_a_press_in_progress_at_shutdown_is_lifted_as_soon_as_it_returns() -> No
     window = QuitWhenStuckWindow(output.stuck)
 
     status = run_preview(
-        Config(),
+        base_config(),
         StallingCamera(frames=1000),
         Script(drag_script),
         window,
@@ -566,7 +574,7 @@ def test_on_a_normal_quit_only_the_worker_touches_the_output_and_the_tracker() -
     camera, stepped_window = lockstep(FrameCamera(), window)
 
     run_preview(
-        Config(),
+        base_config(),
         camera,
         tracker,
         stepped_window,
@@ -622,7 +630,7 @@ def test_a_worker_error_is_raised_on_the_main_thread_after_a_clean_stop(
 
     with pytest.raises(type(error), match=str(error)):
         run_preview(
-            Config(),
+            base_config(),
             FrameCamera(),
             FailingTracker(error, at=60),  # mid-drag
             EndlessWindow(),
@@ -681,7 +689,7 @@ def test_the_live_preview_turns_worker_errors_into_the_same_message_and_exit_sta
     monkeypatch.setattr(airmouse.app, "QuartzOutput", FakeQuartzOutput)
     monkeypatch.setattr(airmouse.app, "OpenCvWindow", EndlessWindow)
 
-    status = run_live_preview(Config())
+    status = run_live_preview(base_config())
 
     assert status == 1
     assert capsys.readouterr().err == f"airmouse: {message}\n"
@@ -705,7 +713,7 @@ def test_the_readout_has_worker_and_window_stages_and_both_rates(
     camera, window = lockstep(FrameCamera(), RecordingWindow(frames=5))
 
     run_preview(
-        Config(),
+        base_config(),
         camera,
         ListTracker(open_hand()),
         window,
@@ -736,7 +744,7 @@ def test_the_worker_thread_is_a_daemon_so_a_stuck_read_cannot_keep_the_process_a
             return super().quit_requested()
 
     run_preview(
-        Config(),
+        base_config(),
         camera,
         ListTracker(None),
         CheckingWindow(camera.stalled, checks=1),
@@ -818,7 +826,7 @@ def test_a_press_after_shutdown_is_still_ignored_with_relative_mode_reading_the_
     output = RecordingOutput()
     screen = CountingScreen()
     guarded = ShutdownOutput(output, io.StringIO(), screen)
-    config = Config()  # relative mode, the default
+    config = RELATIVE
     controller = Controller(
         config.timing,
         guarded,
@@ -848,7 +856,7 @@ def test_a_press_after_shutdown_is_still_ignored_with_relative_mode_reading_the_
 
 def test_the_snapshot_carries_the_clutch_and_the_fist_reading() -> None:
     tracker = ListTracker(open_hand())
-    worker, _ = make_worker(tracker, RecordingOutput())
+    worker, _ = make_worker(tracker, RecordingOutput(), config=RELATIVE)
     for _ in range(30):
         worker.step()
     tracker.landmarks = synthetic_hand("fist")
@@ -865,13 +873,35 @@ def test_the_snapshot_carries_the_clutch_and_the_fist_reading() -> None:
 
 
 def test_relative_mode_snapshots_do_not_outline_the_region_and_absolute_ones_do() -> None:
-    relative, _ = make_worker(ListTracker(open_hand()), RecordingOutput())
-    absolute, _ = make_worker(
-        ListTracker(open_hand()), RecordingOutput(), config=ABSOLUTE, outline_region=True
-    )
+    relative, _ = make_worker(ListTracker(open_hand()), RecordingOutput(), config=RELATIVE)
+    absolute, _ = make_worker(ListTracker(open_hand()), RecordingOutput(), config=ABSOLUTE)
 
     relative_view = relative.step()
     absolute_view = absolute.step()
 
     assert relative_view is not None and not relative_view.view.outline
     assert absolute_view is not None and absolute_view.view.outline
+
+
+def test_a_worker_draws_no_region_outline_unless_asked() -> None:
+    config = ABSOLUTE
+    guarded = ShutdownOutput(RecordingOutput(), io.StringIO())
+    controller = Controller(
+        config.timing, guarded, make_cursor_path(config, DEFAULT_DISPLAY), config.open_palm
+    )
+    worker = Worker(
+        config,
+        FrameCamera(),
+        ListTracker(open_hand()),
+        LatestSlot[Snapshot](),
+        controller=controller,
+        output=guarded,
+        region=mapped_region(config, DEFAULT_DISPLAY),
+        show_camera_image=False,
+        clock=Clock(),
+        timer=Clock(),
+    )
+
+    snapshot = worker.step()
+
+    assert snapshot is not None and not snapshot.view.outline

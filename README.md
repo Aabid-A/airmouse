@@ -75,7 +75,8 @@ Terms used in this document are defined in [GLOSSARY.md](GLOSSARY.md).
 the Pointer moves, from wherever the cursor is when airmouse starts following. Movement
 is measured in hand sizes, so it feels the same near or far from the camera, and
 `[relative]` sets the gain, the acceleration and a cap. Bending or straightening the
-index finger alone does not move the cursor; moving the hand does. The cursor moves
+index finger alone does not move the cursor; moving the hand, or swinging the finger
+sideways, does. Slow movements add up, so even a tiny one moves the cursor. The cursor moves
 across all your displays, of any size and arrangement, and stops at the outer edges of
 the whole desk: a move off an edge slides along it. airmouse reads the display list about
 once a second, so plugging a display in or out while it runs is fine; if the display
@@ -83,12 +84,19 @@ under the cursor goes away, the cursor moves to the nearest one left. Display
 coordinates are in points, so Retina displays need nothing special.
 
 To reach further, use the **clutch**: make a Fist (all four fingers curled), move your
-hand back, and point again. While the Fist is held the cursor stays put, and taking your
-hand out of the camera's view does the same (No hand). The cursor never jumps when you
-point again.
+hand back, and point again. While the Fist is held the cursor stays put and the Preview
+says CLUTCH. Taking your hand out of the camera's view also stops the cursor (shown as
+NO HAND). The cursor never jumps when you point again.
+
+While your fingers are curling towards a Fist (the finger curl at `[clutch]
+hold_threshold` or more) the cursor holds still and the Preview says HOLD, so closing
+the fist never drags the cursor. Straighten the index (the Pointer pose) and it follows
+again. A Pointer held at an angle to the camera, or with the index a little bent, is
+not curled and never holds.
 
 **Absolute** maps the Active region to the main display only: the cursor goes where the
-Pointer is in the region.
+Pointer is in the region. It works exactly as before relative mode existed: there is no
+clutch and no HOLD, because the hand's position is the cursor.
 
 ### Active region
 
@@ -105,7 +113,7 @@ and in absolute mode the Preview outlines it. Calibrate mode always shows it.
 | Pointer | The index fingertip | Moves the cursor while airmouse is active. |
 | Pinch | Thumb tip and index tip brought together, measured against hand size | A short Pinch is a click. A Pinch held while the Pointer moves is a drag. |
 | Open palm | The four fingers held upright and extended, together or spread | Pauses at once. Held steady, it unpauses. |
-| Fist | All four fingers curled, the index included; the thumb is free | Held for 100 ms (`[clutch] debounce_ms`), the clutch: the cursor stops following and any drag is released. |
+| Fist | All four fingers curled, the index included; the thumb is free (beside the fingers or tucked over them) | Relative mode: held for 100 ms (`[clutch] debounce_ms`), the clutch: the cursor stops following and any drag is released. |
 
 Details that matter in use:
 
@@ -113,11 +121,13 @@ Details that matter in use:
 - A Pinch released within 300 ms without the Pointer moving is a click. If the Pointer
   moves further while the Pinch is closed, it becomes a drag until the Pinch opens.
 - A closed Pinch never counts as an Open palm.
-- A Fist is never a Pinch or an Open palm. Closing a fist moves the index towards the
-  thumb, so while the fingers curl the cursor holds still, a Pinch that closes on the way
-  is cancelled without a click, and a drag only starts when the whole hand moves. After
-  the clutch the fingers must open fully (the Pointer pose) before the cursor follows or
-  a Pinch can click.
+- In relative mode a Fist is never a Pinch or an Open palm. Closing a fist moves the
+  index towards the thumb, so while the fingers curl the cursor holds still (HOLD), a
+  Pinch that closes on the way is cancelled without a click once the index folds back
+  towards the palm, and a drag only starts when the whole hand moves. After the clutch
+  the fingers must open (the finger curl below `hold_threshold`) before the cursor
+  follows, and a Pinch in the first 0.3 s after the clutch is ignored, since that is the
+  index passing the thumb as the hand opens.
 - After a held Open palm unpauses airmouse, the Open palm is ignored until the Hand
   leaves that shape, so the same palm cannot pause it again at once.
 
@@ -131,8 +141,8 @@ airmouse starts **Paused**: Hand movement produces no input.
 | active | Paused | An Open palm lasts 150 ms (`pause_debounce_ms`). Any drag is released. |
 | active | No hand | No Hand has been seen for 250 ms (`no_hand_timeout_ms`). |
 | No hand | active | The Hand returns. |
-| active | clutch | A Fist lasts 100 ms (`[clutch] debounce_ms`). Any drag is released. |
-| clutch | active | The fingers open again into the Pointer pose. |
+| active | clutch | Relative mode: a Fist lasts 100 ms (`[clutch] debounce_ms`). Any drag is released. |
+| clutch | active | The fingers open again (HOLD until the finger curl is below `hold_threshold`). |
 
 In No hand the cursor freezes and any drag is released. airmouse stays unpaused. When the
 Hand returns, the cursor follows the Pointer again from its new position. A Hand that
@@ -142,8 +152,8 @@ as Paused whether or not a Hand is visible.
 
 In relative mode the cursor then carries on from where it is, so it never jumps.
 
-The Preview labels each state: PAUSED, ACTIVE, PINCH, DRAG, NO HAND and CLUTCH. The label is always
-text, never only a colour.
+The Preview labels each state: PAUSED, ACTIVE, PINCH, DRAG, NO HAND, CLUTCH and HOLD. The
+label is always text, never only a colour.
 
 ## Install and run
 
@@ -219,8 +229,9 @@ uv run airmouse --debug-gestures
 ```
 
 The Preview then draws the Open palm score against its threshold, the wrist speed against
-the steadiness tolerance, the Fist score against the clutch threshold, and a column of
-readings on the right:
+the steadiness tolerance, in relative mode the Fist score against the clutch threshold
+(FIST) and the finger curl against the hold threshold (CURL), and a column of readings
+on the right:
 
 - The cursor path (worker thread), in ms: CAM is the wait for the camera, PREP frame
   preparation, TRACK the Hand tracker, CTRL the Controller and cursor output, and FRAME
@@ -232,9 +243,12 @@ readings on the right:
   FPS in the Preview's corner is the same number), and UI FPS, images the window shows
   per second.
 
-Adjust the `[open_palm]` and `[clutch]` settings below. The FIST bar must read 0.00
-while you point: any reading above 0 holds the cursor still, as the fingers might be
-closing into a Fist. If your pointing pose reads above 0, lower `[clutch] finger_open`.
+Adjust the `[open_palm]` and `[clutch]` settings below. While you point, the CURL bar
+must stay below its tick (`hold_threshold`), or the cursor holds still and the Preview
+says HOLD. If your pointing pose reads curled, lower `[clutch] tip_open` and
+`tip_curled` (how far back the fingertip must fold), or raise `hold_threshold`. If a
+Fist does not clutch, check the FIST bar reaches its tick; raise `tip_open` or lower
+`score_threshold`.
 
 ## Config reference
 
@@ -278,10 +292,13 @@ uv run airmouse --print-config > ~/.config/airmouse/config.toml
 | `[relative] gain` | `800.0` | Relative mode: display points the cursor moves per hand size of Pointer movement, 1 to 20000. |
 | `[relative] acceleration` | `0.5` | Relative mode: extra gain with speed. The gain is `gain * (1 + acceleration * speed)`, speed in hand sizes per second; 0 means none. 0 to 10. |
 | `[relative] max_gain` | `3000.0` | Relative mode: the gain never goes above this, however fast the hand moves. At least `gain`. |
-| `[clutch] score_threshold` | `0.6` | The Fist counts when its score, from 0 to 1, reaches this. |
-| `[clutch] finger_curled` | `1.0` | Each finger is measured as wrist-to-tip over wrist-to-base distance; this ratio or less is fully curled. Must be below `finger_open`. |
-| `[clutch] finger_open` | `1.4` | This ratio or more is an open finger. The Fist score is the least curled finger. |
-| `[clutch] pinch_gap` | `0.3` | A thumb tip closer than this many hand sizes to the index tip is a Pinch, never a Fist. |
+| `[clutch] score_threshold` | `0.6` | Relative mode: the Fist counts when its score, from 0 to 1, reaches this. |
+| `[clutch] hold_threshold` | `0.3` | The cursor holds still (HOLD) while the finger curl, from 0 to 1, is at this or more. At most `score_threshold`. |
+| `[clutch] tip_curled` | `-0.15` | Each finger's tip is measured along the hand's axis (wrist to the middle finger's base), past its own base, in hand sizes: this or less is fully curled. Must be below `tip_open`. |
+| `[clutch] tip_open` | `0.0` | This or more is an open finger. A finger aimed at the camera looks short, but its tip still lies past its base. |
+| `[clutch] finger_curled` | `1.0` | Each finger is also measured as wrist-to-tip over wrist-to-base distance; this ratio or less is fully curled. A finger counts as curled only when both measures agree. Must be below `finger_open`. |
+| `[clutch] finger_open` | `1.4` | This ratio or more is an open finger. The finger curl is the least curled finger. |
+| `[clutch] pinch_gap` | `0.1` | A thumb tip closer than this many hand sizes to the index tip is a Pinch, never a Fist. A thumb tucked over the fingers further away is still a Fist. |
 | `[clutch] debounce_ms` | `100.0` | Milliseconds a Fist must last to become the clutch. |
 
 Example `config.toml` for an overhead camera and a smaller Active region:
@@ -374,6 +391,9 @@ Known limits:
 - The Open palm, Fist and relative-mode values were tuned on synthetic landmarks. Tune
   them on your Hand with `--debug-gestures`, `[open_palm]`, `[clutch]` and `[relative]`.
 - Absolute mode maps to the main display only; relative mode reaches every display.
+- A Pointer aimed steeply at the camera with the index well bent (on synthetic hands:
+  about 70 degrees of bend at 60 degrees of tilt) looks like a curled finger, because its
+  tip folds back past its base in the picture. The cursor then holds (HOLD).
 - One Hand is tracked.
 - Camera, cursor output and permission checks have only been exercised in tests with
   fakes unless you have run them on your own Mac. Report problems on the

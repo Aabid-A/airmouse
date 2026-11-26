@@ -1,16 +1,33 @@
 """Display geometry: the union of the display rectangles and the clamp into it."""
 
+import math
+
 import pytest
 
-from airmouse.displays import Display, FixedScreen, clamp_to_displays, main_display
+from airmouse.displays import (
+    Display,
+    FixedScreen,
+    clamp_to_displays,
+    main_display,
+    to_point,
+)
 from airmouse.gestures import Point
 
 MAIN = Display(0, 0, 1440, 900)  # a 1440x900-point laptop screen, the main display
+EDGE_X = math.nextafter(1440.0, 0.0)  # the last position on MAIN before x = 1440
+EDGE_Y = math.nextafter(900.0, 0.0)
 
 
-def test_a_display_covers_whole_points_from_its_origin() -> None:
-    assert (MAIN.right, MAIN.bottom) == (1439, 899)
-    assert MAIN.centre == (719.5, 449.5)
+def test_a_display_is_half_open_its_far_edges_belong_to_the_next() -> None:
+    assert (MAIN.right, MAIN.bottom) == (1440, 900)
+    assert MAIN.centre == (720, 450)
+    assert MAIN.contains((0, 0)) and MAIN.contains((EDGE_X, EDGE_Y))
+    assert not MAIN.contains((1440, 10)) and not MAIN.contains((10, 900))
+
+
+def test_a_position_is_posted_at_the_whole_point_under_it_on_the_same_display() -> None:
+    assert to_point((EDGE_X, EDGE_Y)) == (1439, 899)
+    assert to_point((-0.25, -1919.5)) == (-1, -1920)  # negative coordinates round down too
 
 
 @pytest.mark.parametrize(
@@ -19,8 +36,8 @@ def test_a_display_covers_whole_points_from_its_origin() -> None:
         ((100, 200), (100, 200)),  # inside: unchanged
         ((1439, 899), (1439, 899)),  # the last point is inside
         ((-50, 300), (0, 300)),  # off the left edge: slides along it
-        ((700, 2000), (700, 899)),  # off the bottom
-        ((5000, -5000), (1439, 0)),  # off a corner: the corner
+        ((700, 2000), (700, EDGE_Y)),  # off the bottom
+        ((5000, -5000), (EDGE_X, 0)),  # off a corner: the corner
     ],
 )
 def test_a_single_display_clamps_to_its_nearest_point(point: Point, expected: Point) -> None:
@@ -48,10 +65,10 @@ LEFT = (Display(-1920, -100, 1920, 1080), MAIN)  # to the left: negative coordin
         (STACKED, (-300, -500), (-240, -500)),
         # Offset vertically: the lower display is reachable where they overlap only.
         (OFFSET, (1500, 850), (1500, 850)),
-        (OFFSET, (1500, 100), (1439, 100)),
+        (OFFSET, (1500, 100), (EDGE_X, 100)),
         # A gap between diagonal displays: a point in the gap goes to the nearer display.
         (GAP, (1470, 950), (1500, 950)),
-        (GAP, (1460, 905), (1439, 899)),
+        (GAP, (1460, 905), (EDGE_X, EDGE_Y)),
         # A display at negative coordinates.
         (LEFT, (-5, 500), (-5, 500)),
         (LEFT, (-2500, 500), (-1920, 500)),

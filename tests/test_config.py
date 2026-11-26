@@ -82,6 +82,8 @@ def test_720p_is_a_config_option(tmp_path: Path) -> None:
         ("relative", "max_gain", "inf"),
         ("clutch", "score_threshold", "nan"),
         ("clutch", "debounce_ms", "inf"),
+        ("clutch", "hold_threshold", "nan"),
+        ("clutch", "tip_curled", "-inf"),
     ],
 )
 def test_non_finite_numbers_are_rejected(
@@ -149,7 +151,10 @@ def test_print_config_lists_every_effective_value(
         "max_gain = 3000.0",
         "[clutch]",
         "finger_open = 1.4",
-        "pinch_gap = 0.3",
+        "hold_threshold = 0.3",
+        "tip_curled = -0.15",
+        "tip_open = 0.0",
+        "pinch_gap = 0.1",
         "debounce_ms = 100.0",
     ]:
         assert expected in out
@@ -178,6 +183,9 @@ def test_printed_config_loads_back_unchanged(tmp_path: Path) -> None:
         ("[relative]\ngian = 900\n", "relative.gian"),
         ("[clutch]\nscore_threshold = 2\n", "clutch.score_threshold"),
         ("[clutch]\ndebounce_ms = -5\n", "clutch.debounce_ms"),
+        ("[clutch]\ntip_curled = 0.1\ntip_open = 0.0\n", "clutch.tip_curled"),
+        ("[clutch]\nhold_threshold = 0.7\n", "clutch.hold_threshold"),
+        ("[clutch]\nhold_threshold = -0.1\n", "clutch.hold_threshold"),
         ("[clutch]\nfinger_curled = 1.6\nfinger_open = 1.4\n", "clutch.finger_curled"),
         ("[pinch]\nclose_threshold = 0.5\nopen_threshold = 0.4\n", "pinch.close_threshold"),
         ("[timing]\nunpause_hold_s = -1\n", "timing.unpause_hold_s"),

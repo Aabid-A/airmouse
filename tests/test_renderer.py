@@ -42,7 +42,7 @@ from airmouse.renderer import (
     stage_for,
     to_canvas,
 )
-from anatomy import synthetic_hand
+from anatomy import closing_fist, synthetic_hand
 from hands import open_hand, pinched, placed, pointing_hand
 from png import decode_png
 
@@ -124,7 +124,15 @@ def debug_cases() -> dict[str, Image]:
             debug=DebugReadout(
                 reading(0.13, 0.4, counts=False, steady=True),
                 TIMINGS,
-                FistReading(score=0.97, threshold=0.6, counts=True, clutch=True),
+                FistReading(
+                    score=0.97,
+                    threshold=0.6,
+                    counts=True,
+                    clutch=True,
+                    curl=0.97,
+                    hold_threshold=0.3,
+                    holding=False,
+                ),
             ),
         ),
         "debug_no_hand": render_preview(
@@ -138,6 +146,7 @@ def debug_cases() -> dict[str, Image]:
 
 PINCHED = placed(pinched(pointing_hand(), 0.05), dy=-0.08)
 FIST = synthetic_hand("fist", centre=(0.5, 0.68))
+HALF_CLOSED = placed(closing_fist(0.6), dy=-0.07)
 RELATIVE_VIEW = FrameView(outline=False)  # relative mode: no Active region outline
 
 
@@ -172,6 +181,14 @@ def state_cases() -> dict[str, Image]:
         ),
         "clutch": render_preview(
             State.ACTIVE, landmarks=FIST, camera_on=True, fps=30.0, view=RELATIVE_VIEW, clutch=True
+        ),
+        "hold": render_preview(
+            State.ACTIVE,
+            landmarks=HALF_CLOSED,
+            camera_on=True,
+            fps=30.0,
+            view=RELATIVE_VIEW,
+            holding=True,
         ),
         "no_hand": render_preview(State.PAUSED, camera_on=True, fps=30.0),
         "no_hand_active": render_preview(State.ACTIVE, camera_on=True, fps=30.0, no_hand=True),
@@ -655,6 +672,7 @@ def test_every_state_has_a_render_of_its_own() -> None:
             "dragging",
             "no_hand_active",
             "clutch",
+            "hold",
         )
     }
 
@@ -730,3 +748,51 @@ def test_the_fist_bar_is_below_the_palm_lines_and_empty_with_no_hand() -> None:
     assert without.pixels != plain.pixels  # the empty bar and its text are still drawn
     top = DEBUG_FIST_TOP * WIDTH * 3
     assert without.pixels[:top] == plain.pixels[:top]  # nothing above it changed
+
+
+def test_the_hold_says_so_and_only_the_label_differs_from_active() -> None:
+    active = render_preview(State.ACTIVE, landmarks=HALF_CLOSED, camera_on=True)
+    hold = render_preview(State.ACTIVE, landmarks=HALF_CLOSED, camera_on=True, holding=True)
+
+    assert hold.pixels != active.pixels
+    top = LABEL_TOP * WIDTH * 3
+    assert hold.pixels[:top] == active.pixels[:top]
+
+
+def test_paused_no_hand_and_the_clutch_outrank_the_hold() -> None:
+    def pair(state: State, *, no_hand: bool = False, clutch: bool = False) -> tuple[Image, Image]:
+        def draw(holding: bool) -> Image:
+            return render_preview(
+                state, landmarks=PINCHED, no_hand=no_hand, clutch=clutch, holding=holding
+            )
+
+        return draw(False), draw(True)
+
+    for plain, held in (
+        pair(State.PAUSED),
+        pair(State.ACTIVE, no_hand=True),
+        pair(State.ACTIVE, clutch=True),
+    ):
+        assert held.pixels == plain.pixels
+
+
+def test_the_curl_bar_shows_the_finger_curl_against_the_hold_threshold() -> None:
+    def curl_readout(curl: float, *, holding: bool) -> DebugReadout:
+        fist = FistReading(
+            score=0.0,
+            threshold=0.6,
+            counts=False,
+            clutch=False,
+            curl=curl,
+            hold_threshold=0.3,
+            holding=holding,
+        )
+        return DebugReadout(reading(0.1, 0.0, counts=False, steady=True), (), fist)
+
+    bar_top = DEBUG_FIST_TOP + DEBUG_ROW + DEBUG_BAR_OFFSET
+    low = render_preview(State.ACTIVE, debug=curl_readout(0.25, holding=False))
+    high = render_preview(State.ACTIVE, debug=curl_readout(1.0, holding=True))
+
+    assert filled_width(low, bar_top, TEXT_ACTIVE) == DEBUG_BAR_WIDTH // 4
+    assert filled_width(high, bar_top, TEXT_PAUSED) == DEBUG_BAR_WIDTH - 1
+    assert low.get(BAR_LEFT + round(0.3 * DEBUG_BAR_WIDTH), bar_top + 2) == JOINT

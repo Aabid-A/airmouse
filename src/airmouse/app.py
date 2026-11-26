@@ -16,7 +16,8 @@ Hand and the Active region instead and no controller is built at all, so it can
 make no cursor input. In relative control mode (the default) the Preview does not
 outline the Active region, since nothing maps through it; absolute mode and
 calibrate mode do. With `--debug-gestures` the Preview also draws the Open
-palm score, the wrist speed, the Fist score against the clutch threshold, the
+palm score, the wrist speed, in relative mode the Fist score and finger curl
+against the clutch and hold thresholds, the
 worker's stage timings (CAM, PREP, TRACK, CTRL, and FRAME, the camera's delivery
 interval), the window's (DRAW, WIN), and the tracking and window rates. Frames
 are rotated and mirrored by `prepare_frame` before tracking.
@@ -163,6 +164,7 @@ class PreviewLoop:
             phase=status.phase,
             view=snapshot.view,
             clutch=status.clutch,
+            holding=status.holding,
         )
 
     def _readout_rows(self, snapshot: Snapshot) -> tuple[tuple[str, float], ...]:
@@ -200,6 +202,7 @@ def run_preview(
     `debug_gestures` draws the gesture readout and stage timings (`timer` measures them).
     The worker thread's errors are raised here, after everything is released.
     """
+    relative = config.control.mode == "relative"
     cursor_output = (
         None
         if calibrate
@@ -216,7 +219,7 @@ def run_preview(
             make_cursor_path(config, display, cursor_output),
             config.open_palm,
             config.pinch,
-            config.clutch,
+            config.clutch if relative else None,  # the clutch is relative-mode only
         )
     )
     slot = LatestSlot[Snapshot]()
@@ -227,8 +230,8 @@ def run_preview(
         slot,
         controller=controller,
         output=cursor_output,
-        region=mapped_region(config, display),  # the Preview outlines what the cursor maps
-        outline_region=config.control.mode == "absolute",
+        region=mapped_region(config, display),
+        outline_region=not relative,  # absolute mode outlines the region the cursor maps
         show_camera_image=show_camera_image,
         clock=clock,
         timer=timer,

@@ -1,11 +1,12 @@
 """Relative control mode, the RelativePath on its own: deltas, gain, displays, resets."""
 
 import math
+from collections.abc import Callable
 
 import pytest
 
 from airmouse.config import Config, RelativeConfig
-from airmouse.displays import Display
+from airmouse.displays import Display, to_point
 from airmouse.gestures import POINTER, Landmarks, Point, hand_size
 from airmouse.mapping import RelativePath, make_cursor_path
 from anatomy import closing_fist
@@ -85,7 +86,7 @@ def test_the_cursor_moves_by_the_pointer_delta_in_hand_sizes_times_the_gain() ->
     moved = feed(placed(HAND, dx=0.03, dy=-0.02))
 
     expected = (700 + 0.03 * ASPECT / SIZE * 1000, 400 - 0.02 / SIZE * 1000)
-    assert moved == pytest.approx(expected)
+    assert moved == to_point(expected)  # posted at the whole point under the cursor
 
 
 def test_the_same_movement_moves_the_cursor_the_same_near_or_far_from_the_camera() -> None:
@@ -97,7 +98,7 @@ def test_the_same_movement_moves_the_cursor_the_same_near_or_far_from_the_camera
     a = near(placed(HAND, scale=1.5, dx=0.03))
     b = far(placed(HAND, scale=0.75, dx=0.015))
 
-    assert a == pytest.approx(b)
+    assert a == pytest.approx(b, abs=1)
 
 
 def test_sideways_and_upward_movements_of_the_same_size_move_the_cursor_the_same() -> None:
@@ -108,7 +109,7 @@ def test_sideways_and_upward_movements_of_the_same_size_move_the_cursor_the_same
     across = sideways(placed(HAND, dx=0.03 / ASPECT))[0] - 700  # 0.03 frame heights
     up = 400 - upward(placed(HAND, dy=-0.03))[1]
 
-    assert across == pytest.approx(up)
+    assert across == pytest.approx(up, abs=1)
 
 
 def test_acceleration_adds_gain_with_speed_up_to_the_cap() -> None:
@@ -141,7 +142,7 @@ def test_with_no_acceleration_speed_changes_nothing() -> None:
             x = feed(placed(HAND, dx=0.06 * frame / frames))[0]
         return x - 100
 
-    assert travel(2) == pytest.approx(travel(12))
+    assert travel(2) == pytest.approx(travel(12), abs=1)
 
 
 def test_bending_the_index_finger_barely_moves_the_cursor() -> None:
@@ -185,7 +186,7 @@ def test_a_move_off_the_displays_slides_along_the_edge() -> None:
     x, y = feed(placed(HAND, dx=0.02, dy=0.1))  # down and right, far past the bottom
 
     assert y == 899
-    assert x == pytest.approx(700 + 0.02 * ASPECT / SIZE * 1000)
+    assert x == math.floor(700 + 0.02 * ASPECT / SIZE * 1000)
 
 
 def test_the_display_list_is_read_about_once_a_second() -> None:
@@ -250,3 +251,43 @@ def test_the_default_config_builds_a_relative_path_on_the_main_display() -> None
 
     assert isinstance(path, RelativePath)
     assert path.displays == (MAIN,)
+
+
+# Slow movement must add up and cross a seam, even under half a point per frame.
+STEP = 0.4 / (ASPECT / SIZE * 1000)  # a sideways hand step that moves the cursor 0.4 points
+ABOVE = Display(-240, -1080, 1920, 1080)  # stacked above MAIN
+LOWER_RIGHT = Display(1440, 300, 1280, 800)  # to the right, offset downwards
+
+
+def on_a_display(point: Point, displays: tuple[Display, ...]) -> bool:
+    return any(display.contains(point) for display in displays)
+
+
+@pytest.mark.parametrize(
+    ("displays", "start", "step", "crossed"),
+    [
+        ((MAIN, RIGHT), (1430.0, 300.0), (STEP, 0.0), lambda p: p[0] >= 1440),
+        ((MAIN, ABOVE), (700.0, 10.0), (0.0, -STEP * ASPECT), lambda p: p[1] < 0),
+        ((MAIN, LOWER_RIGHT), (1430.0, 600.0), (STEP, 0.0), lambda p: p[0] >= 1440),
+    ],
+    ids=["side by side", "stacked", "offset"],
+)
+def test_movement_under_half_a_point_a_frame_still_crosses_a_seam(
+    displays: tuple[Display, ...], start: Point, step: Point, crossed: Callable[[Point], bool]
+) -> None:
+    feed = Feed(make_path(FakeScreen(displays, cursor=start)))
+    positions = [feed(placed(HAND, dx=step[0] * frame, dy=step[1] * frame)) for frame in range(101)]
+
+    assert crossed(positions[-1])
+    assert all(on_a_display(p, displays) for p in positions)  # every posted point
+    moves = [math.dist(a, b) for a, b in zip(positions, positions[1:], strict=False)]
+    assert max(moves) <= 1.0  # one whole point at a time: no jump at the seam
+
+
+def test_a_cursor_pushed_against_the_outer_edge_stays_on_the_display() -> None:
+    feed = Feed(make_path(FakeScreen((MAIN, RIGHT), cursor=(3350.0, 500.0))))
+
+    positions = [feed(placed(HAND, dx=STEP * 50 * frame)) for frame in range(20)]
+
+    assert all(on_a_display(p, (MAIN, RIGHT)) for p in positions)
+    assert positions[-1][0] == RIGHT.right - 1

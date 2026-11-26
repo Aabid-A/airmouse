@@ -229,6 +229,7 @@ class ControllerStatus:
     no_hand: bool
     reading: PalmReading
     clutch: bool = False
+    holding: bool = False
     fist: FistReading | None = None
 
     @classmethod
@@ -240,6 +241,7 @@ class ControllerStatus:
             controller.no_hand,
             controller.reading,
             controller.clutch,
+            controller.holding,
             controller.fist_reading,
         )
 
@@ -286,7 +288,7 @@ class Worker:
         controller: Controller | None,
         output: ShutdownOutput | None,
         region: Region,
-        outline_region: bool = True,
+        outline_region: bool = False,
         show_camera_image: bool,
         clock: Callable[[], float],
         timer: Callable[[], float],
@@ -298,7 +300,7 @@ class Worker:
         self._controller = controller
         self._output = output
         self._region = region  # the mapped region the Preview outlines
-        self._outline_region = outline_region  # False in relative mode: nothing maps through it
+        self._outline_region = outline_region  # only absolute mode maps through the region
         self._show_camera_image = show_camera_image
         self._clock = clock
         self._timer = timer

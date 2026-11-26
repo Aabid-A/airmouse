@@ -185,7 +185,8 @@ DEFAULT_VIEW = FrameView()
 class DebugReadout:
     """What `--debug-gestures` draws: the palm reading, then rows of (name, value) on the right:
     stage timings in ms and, last, the tracking and window rates in frames per second.
-    `fist`, when given, adds the Fist score against the clutch threshold under the palm."""
+    `fist`, when given (relative mode), adds the Fist score against the clutch threshold
+    and the finger curl against the hold threshold under the palm."""
 
     palm: PalmReading
     timings: tuple[tuple[str, float], ...] = ()
@@ -276,6 +277,7 @@ def render_preview(
     phase: Phase = Phase.IDLE,
     view: FrameView = DEFAULT_VIEW,
     clutch: bool = False,
+    holding: bool = False,
 ) -> Image:
     """The Preview for a state.
 
@@ -287,12 +289,14 @@ def render_preview(
     prepared frame, `view` sized) is drawn behind everything only when
     `show_camera_image` is True: the default Privacy preview ignores it. `debug`
     adds the gesture readout. `no_hand` (the No hand state) shows NO HAND, and
-    `clutch` (the Fist clutch is held) shows CLUTCH. `view` is the prepared frame's
+    `clutch` (the Fist clutch is held) shows CLUTCH, and `holding` (the cursor holds
+    still while the fingers are curled) shows HOLD. `view` is the prepared frame's
     size and the Active region.
     """
     canvas = _base(view, camera_on, REGION_PREVIEW, camera_image, show_camera_image)
     paused = state is State.PAUSED
-    pressed = not paused and not no_hand and not clutch and phase is not Phase.IDLE
+    still = no_hand or clutch or holding
+    pressed = not paused and not still and phase is not Phase.IDLE
     if paused:
         _draw_hold_ring(canvas, view, hold_progress)
         _draw_label(canvas, "PAUSED", TEXT_PAUSED, "HOLD AN OPEN PALM TO START")
@@ -300,6 +304,8 @@ def render_preview(
         _draw_label(canvas, "NO HAND", TEXT_PAUSED, "SHOW YOUR HAND TO THE CAMERA")
     elif clutch:
         _draw_label(canvas, "CLUTCH", TEXT_PAUSED, "POINT TO MOVE AGAIN")
+    elif holding:
+        _draw_label(canvas, "HOLD", TEXT_PAUSED, "STRAIGHTEN YOUR FINGER TO MOVE")
     elif phase is Phase.DRAGGING:
         _draw_label(canvas, "DRAG", TEXT_PINCH, "OPEN THE PINCH TO DROP")
     elif phase is Phase.PRESSED:
@@ -744,6 +750,15 @@ def _draw_debug(canvas: Canvas, readout: DebugReadout) -> None:
             mark=fist.threshold,
             full=1.0,
             good=fist.counts,
+        )
+        _draw_meter(
+            canvas,
+            DEBUG_FIST_TOP + DEBUG_ROW,
+            f"CURL {_number(fist.curl, places=2)}/{_number(fist.hold_threshold, places=2)}",
+            fraction=fist.curl,
+            mark=fist.hold_threshold,
+            full=1.0,
+            good=fist.curl is not None and fist.curl < fist.hold_threshold,
         )
     for line, (name, milliseconds) in enumerate(readout.timings):
         text = f"{name} {_number(milliseconds)}"
