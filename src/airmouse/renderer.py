@@ -23,9 +23,10 @@ from functools import lru_cache
 
 import numpy as np
 
-from airmouse.controller import FistReading, PalmReading, Phase, ScrollReading, State
+from airmouse.controller import FistReading, PalmReading, Phase, State
 from airmouse.frame import Region, active_region
 from airmouse.gestures import LANDMARK_COUNT, Landmarks, Point
+from airmouse.scroll import ScrollReading, ScrollState
 
 # The canvas: 16:9 so a screen recording of the window is a standard video shape.
 # 640x360 is shown at 2x (1280x720) by the window. All layout below is in canvas pixels.
@@ -160,6 +161,7 @@ DEBUG_TICK_OVERHANG = 2
 DEBUG_LINE = 10
 DEBUG_FIST_TOP = DEBUG_TOP + 2 * DEBUG_ROW + 2 * DEBUG_LINE + 4  # under COUNTS and STEADY
 DEBUG_SCROLL_TOP = DEBUG_FIST_TOP + 2 * DEBUG_ROW  # under the Fist meters (or their place)
+DEBUG_SCROLL_STATE_TOP = DEBUG_SCROLL_TOP + DEBUG_ROW  # the scroll state line, under TWO
 DEBUG_OFFSET_RANGE = 1.0  # the scroll offset bar is full at this many hand sizes
 DEBUG_RATE_CAP = 99999.0  # scroll speeds are shown in whole pixels per second
 DEBUG_SPEED_RANGE = 2.0  # the speed bar is full at this many times its limit
@@ -190,8 +192,10 @@ class DebugReadout:
     stage timings in ms and, last, the tracking and window rates in frames per second.
     `fist`, when given (relative mode), adds the Fist score against the clutch threshold
     and the finger curl against the hold threshold under the palm. `scroll`, when given,
-    adds the two-finger score against its threshold, the scroll offset from the anchor
-    against the deadzone and the scroll speed against its cap, under the Fist's place."""
+    adds the two-finger score against its entry (or, while scrolling, exit) threshold,
+    the scroll state, the smoothed offset from the anchor against the deadzone, the
+    scroll speed against its cap and the flick measure against the flick speed, under
+    the Fist's place."""
 
     palm: PalmReading
     timings: tuple[tuple[str, float], ...] = ()
@@ -786,19 +790,32 @@ def _direction(value: float | None) -> str:
 
 
 def _draw_scroll_debug(canvas: Canvas, scroll: ScrollReading) -> None:
+    exit_text = _number(scroll.exit_threshold, places=2)
     _draw_meter(
         canvas,
         DEBUG_SCROLL_TOP,
-        f"TWO {_number(scroll.score, places=2)}/{_number(scroll.threshold, places=2)}",
+        f"TWO {_number(scroll.score, places=2)}/{_number(scroll.threshold, places=2)}"
+        f" OUT {exit_text}",
         fraction=scroll.score,
-        mark=scroll.threshold,
+        mark=scroll.threshold if not scroll.scrolling else scroll.exit_threshold,
         full=1.0,
         good=scroll.counts,
     )
+    state = scroll.state
+    colour = (
+        TEXT_ACTIVE
+        if state is ScrollState.SCROLLING
+        else STATUS_TEXT
+        if state is ScrollState.IDLE
+        else TEXT_PAUSED
+    )
+    text = f"SCROLL {state.value.upper()}"
+    _draw_text(canvas, text, DEBUG_LEFT, DEBUG_SCROLL_STATE_TOP, DEBUG_SIZE, 1, colour)
+    top = DEBUG_SCROLL_STATE_TOP + DEBUG_LINE
     offset = None if scroll.offset is None else abs(scroll.offset)
     _draw_meter(
         canvas,
-        DEBUG_SCROLL_TOP + DEBUG_ROW,
+        top,
         f"OFFSET {_direction(scroll.offset)}"
         f"{_number(offset, places=2)}/{_number(scroll.deadzone, places=2)}",
         fraction=offset,
@@ -809,12 +826,22 @@ def _draw_scroll_debug(canvas: Canvas, scroll: ScrollReading) -> None:
     rate = f"{_number(abs(scroll.speed), DEBUG_RATE_CAP, 0)}"
     _draw_meter(
         canvas,
-        DEBUG_SCROLL_TOP + 2 * DEBUG_ROW,
+        top + DEBUG_ROW,
         f"RATE {_direction(scroll.speed)}{rate}/{_number(scroll.max_speed, DEBUG_RATE_CAP, 0)}",
         fraction=abs(scroll.speed) if scroll.scrolling else None,
         mark=scroll.max_speed,
         full=scroll.max_speed,
         good=scroll.scrolling,
+    )
+    flick = None if scroll.flick is None else abs(scroll.flick)
+    _draw_meter(
+        canvas,
+        top + 2 * DEBUG_ROW,
+        f"FLICK {_direction(scroll.flick)}{_number(flick)}/{_number(scroll.flick_speed)}",
+        fraction=flick,
+        mark=scroll.flick_speed,
+        full=scroll.flick_speed * DEBUG_SPEED_RANGE,
+        good=flick is not None and flick >= scroll.flick_speed,
     )
 
 

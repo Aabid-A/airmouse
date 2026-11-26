@@ -19,8 +19,10 @@ calibrate mode do. With `--debug-gestures` the Preview also draws the Open
 palm score, the wrist speed, in relative mode the Fist score and finger curl
 against the clutch and hold thresholds, the
 worker's stage timings (CAM, PREP, TRACK, CTRL, and FRAME, the camera's delivery
-interval), the window's (DRAW, WIN), and the tracking and window rates. Frames
-are rotated and mirrored by `prepare_frame` before tracking.
+interval), the window's (DRAW, WIN), and the tracking and window rates, plus the
+Scroll's two-finger score, state, offset, speed and flick measure, which it also
+prints to the terminal once a second (`scroll_line`) so the numbers can be copied.
+Frames are rotated and mirrored by `prepare_frame` before tracking.
 """
 
 import math
@@ -37,6 +39,7 @@ from airmouse.mapping import make_cursor_path, mapped_region
 from airmouse.output import OutputError, QuartzOutput
 from airmouse.pipeline import FpsMeter, LatestSlot, ShutdownOutput, Snapshot, StageTimes, Worker
 from airmouse.renderer import DebugReadout, Image, render_calibrate, render_preview
+from airmouse.scroll import ScrollReading
 from airmouse.tracker import HandLandmarkerTracker, Tracker, TrackerError
 from airmouse.window import OpenCvWindow, Window
 
@@ -45,6 +48,8 @@ from airmouse.window import OpenCvWindow, Window
 UI_WAIT_S = 0.03
 # How long quitting waits for the worker before it lifts a held button itself.
 STOP_TIMEOUT_S = 1.0
+# With --debug-gestures, the scroll readout goes to the terminal at most this often.
+SCROLL_LINE_S = 1.0
 
 STUCK_MESSAGE = (
     "airmouse: the camera, tracker or cursor output did not stop in time; "
@@ -77,6 +82,22 @@ class NoOutput:
         pass
 
 
+def scroll_line(reading: ScrollReading) -> str:
+    """One compact line of the Scroll's readout, for the terminal."""
+
+    def number(value: float | None, places: int = 2) -> str:
+        return "--" if value is None else f"{value:+.{places}f}"
+
+    score = "--" if reading.score is None else f"{reading.score:.2f}"
+    return (
+        f"scroll: {reading.state.value} two={score} "
+        f"entry={reading.threshold:.2f} exit={reading.exit_threshold:.2f} "
+        f"offset={number(reading.offset)} deadzone={reading.deadzone:.2f} "
+        f"speed={reading.speed:+.0f}px/s flick={number(reading.flick)}/"
+        f"{reading.flick_speed:.1f}"
+    )
+
+
 def camera_on_line(camera: CameraConfig) -> str:
     return (
         f"camera on: camera {camera.index}, {camera.width}x{camera.height} at {camera.fps} fps. "
@@ -99,8 +120,11 @@ class PreviewLoop:
         show_camera_image: bool,
         debug_gestures: bool,
         timer: Callable[[], float],
+        out: TextIO | None = None,
     ) -> None:
         self._window = window
+        self._out = out  # where the once-a-second scroll line goes with --debug-gestures
+        self._scroll_line_at: float | None = None
         self._slot = slot
         self._show_camera_image = show_camera_image
         self._debug_gestures = debug_gestures
@@ -133,7 +157,20 @@ class PreviewLoop:
         self._stages.record("DRAW", rendered - started)
         self._stages.record("WIN", shown - rendered)
         self._fps = self._meter.tick(shown)
+        self._print_scroll_line(snapshot, shown)
         return quit_requested
+
+    def _print_scroll_line(self, snapshot: Snapshot, now: float) -> None:
+        status = snapshot.controller
+        if not self._debug_gestures or self._out is None or status is None:
+            return
+        if status.scroll is None:
+            return
+        last = self._scroll_line_at
+        if last is not None and now - last < SCROLL_LINE_S:
+            return
+        self._scroll_line_at = now
+        print(scroll_line(status.scroll), file=self._out)
 
     def render(self, snapshot: Snapshot) -> Image:
         camera_image = (
@@ -247,6 +284,7 @@ def run_preview(
         show_camera_image=show_camera_image,
         debug_gestures=debug_gestures,
         timer=timer,
+        out=out,
     )
     print(camera_on_line(config.camera), file=out)
     if calibrate:

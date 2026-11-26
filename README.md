@@ -143,7 +143,7 @@ and in absolute mode the Preview outlines it. Calibrate mode always shows it.
 | Pinch | Thumb tip and index tip brought together, measured against hand size | A short Pinch is a click. A Pinch held while the Pointer moves is a drag. |
 | Open palm | The four fingers held upright and extended, together or spread | Pauses at once. Held steady, it unpauses. |
 | Fist | All four fingers curled, the index included; the thumb is free (beside the fingers or tucked over them) | Relative mode: held for 100 ms (`[clutch] debounce_ms`), the clutch: the cursor stops following and any drag is released. |
-| Scroll | Index and middle fingers raised together, ring and pinky curled, thumb relaxed; then the Hand moved up or down | Held for 120 ms (`[scroll] debounce_ms`), it scrolls: the further the Hand is above or below where the pose started, the faster. Both control modes. |
+| Scroll | Index and middle fingers raised together, ring and pinky curled, thumb relaxed; then the Hand moved up or down | Held for 120 ms (`[scroll] debounce_ms`), it scrolls: hold the Hand above or below where the pose started to scroll steadily (further is faster), or flick it quickly up or down for one big step, as for Reels or Shorts. Both control modes. |
 
 Details that matter in use:
 
@@ -160,15 +160,31 @@ Details that matter in use:
   index passing the thumb as the hand opens.
 - After a held Open palm unpauses airmouse, the Open palm is ignored until the Hand
   leaves that shape, so the same palm cannot pause it again at once.
-- The Scroll is rate-based, like a joystick. Where the two fingertips are when scrolling
-  starts is the anchor. Within 0.15 hand sizes of it (`[scroll] deadzone`) nothing
-  scrolls; further up or down the page scrolls faster, up to 1500 pixels per second
-  (`max_speed`). Back at the anchor it stops. Hand up scrolls up (content above comes
-  into view); `[scroll] invert = true` flips that. It is vertical only.
-- While scrolling the cursor holds still, a Pinch cannot start and the mouse button is
-  never pressed. Lowering the two fingers (any other pose) stops the scroll at once, and
-  so do a Pinch, a Fist and an Open palm (which also pauses). A Pinch that closed while
-  scrolling must open before it can click.
+- The Scroll has two motions (`[scroll] mode`, default `"auto"`):
+  - **Continuous**, like a joystick. Where the two fingertips are when scrolling starts
+    is the anchor. Within 0.15 hand sizes of it (`deadzone`) nothing scrolls; past it the
+    speed eases in smoothly and grows with the distance, up to 1500 pixels per second
+    (`max_speed`). Back at the anchor it stops. The distance is smoothed, so a shaky hand
+    does not make the speed wobble.
+  - **Flick**: a quick move up or down from the anchor (3 hand sizes per second over
+    0.3 hand sizes or more) scrolls one step of 600 pixels at once, then nothing scrolls
+    for 0.5 s (`flick_cooldown_ms`), so the hand can come back without scrolling the
+    other way. The next flick needs the Hand back at the anchor and still for a moment.
+  - In `"auto"`, one motion is one or the other, never both: a slow move gives a
+    continuous scroll (it starts 150 ms after leaving the deadzone, the time a flick has
+    to happen) and a quick one a single step. `mode = "continuous"` turns the flick off;
+    `mode = "flick"` turns the continuous scroll off.
+- Hand up scrolls up (content above comes into view); `[scroll] invert = true` flips
+  both motions. With the default direction a flick **down** shows the next item in a
+  feed such as Reels or Shorts. It is vertical only.
+- While a scroll is on the cursor holds still, a Pinch cannot start and the mouse button
+  is never pressed. A Pinch, a Fist (relative mode) and an Open palm (which also pauses)
+  end it at once. A Pinch that closed while scrolling must open before it can click.
+- Starting needs a clear two-finger pose (`score_threshold`), but staying needs less
+  (`exit_threshold`), and a pose that reads poorly for up to 250 ms (`grace_ms`), as
+  when the two fingers point at the camera and overlap, only fades the scroll out
+  instead of ending it. Relaxing to a Pointer pose or another shape ends it once the
+  grace period is over. The two-finger pose never counts as an Open palm.
 - No hand ends the scroll. A Hand that comes back in the two-finger pose does not scroll:
   form the pose again to start a new scroll from a new anchor.
 
@@ -185,7 +201,7 @@ airmouse starts **Paused**: Hand movement produces no input.
 | active | clutch | Relative mode: a Fist lasts 100 ms (`[clutch] debounce_ms`). Any drag is released. |
 | clutch | active | The fingers open again (HOLD until the finger curl is below `hold_threshold`). |
 | active | scroll | The two-finger pose lasts 120 ms (`[scroll] debounce_ms`). Any drag is released. |
-| scroll | active | The pose ends (at once), or a Pinch, a Fist or an Open palm. No hand ends it too. |
+| scroll | active | The pose has read below `exit_threshold` for 250 ms (`grace_ms`), or at once for a Pinch, a Fist (relative mode) or an Open palm. No hand ends it too. |
 
 In No hand the cursor freezes and any drag is released. airmouse stays unpaused. When the
 Hand returns, the cursor follows the Pointer again from its new position. A Hand that
@@ -221,7 +237,8 @@ camera on: camera 0, 640x480 at 30 fps. Press q in the Preview or Ctrl-C to quit
 and opens the Preview, a 1280x720 window. Show one Hand to the camera and hold an Open
 palm steady for about 0.8 s. The Hold ring fills and airmouse becomes active. Move the
 Pointer to move the cursor, Pinch to click, Pinch and move to drag, raise two fingers and
-move the Hand up or down to scroll, and show an Open palm to pause. Press `q` in the Preview, or Ctrl-C, to quit. On exit airmouse lifts the mouse
+move the Hand up or down to scroll (or flick it for one step), and show an Open palm to
+pause. Press `q` in the Preview, or Ctrl-C, to quit. On exit airmouse lifts the mouse
 button if it was down and prints `camera off`.
 
 ### Command-line flags
@@ -244,7 +261,7 @@ usage: airmouse [-h] [--version] [--config PATH] [--print-config] [--camera N]
 | `--active-region-width FRACTION` | Override `[active_region] width_fraction`. |
 | `--control-mode MODE` | Override `[control] mode`: `relative` (the default) or `absolute`. |
 | `--calibrate` | Calibrate mode: see the Hand and the Active region, with no cursor input. |
-| `--debug-gestures` | Draw the Open palm score, the wrist speed, the Fist and two-finger scores, the scroll offset and speed, per-stage timings and the tracking and window rates in the Preview. |
+| `--debug-gestures` | Draw the Open palm score, the wrist speed, the Fist and two-finger scores, the scroll state, offset, speed and flick measure, per-stage timings and the tracking and window rates in the Preview, and print a one-line scroll readout to the terminal once a second. |
 | `--show-camera-image` | Debugging only. Draw the camera image behind the skeleton. See [Privacy](#privacy). |
 | `--version` | Print the version and exit. |
 
@@ -296,23 +313,45 @@ Fist does not clutch, check the FIST bar reaches its tick; raise `tip_open` or l
 ### Tuning the Scroll
 
 The two-finger pose was also tuned on synthetic landmarks only, so its defaults are
-loose. With `--debug-gestures` the Preview adds three bars under the Fist's place, in both
+loose. With `--debug-gestures` the Preview adds these under the Fist's place, in both
 control modes:
 
-- TWO: the two-finger score against `[scroll] score_threshold`. Each finger is scored by
-  how far its tip is from the wrist, in hand sizes: index and middle must reach
-  `finger_extended` (1.4) for full marks, ring and pinky must be within `finger_curled`
-  (1.0); the score is the weakest of the four.
-- OFFSET: while scrolling, how far the fingertips are above (UP) or below (DOWN) the
+- TWO: the two-finger score against `score_threshold` (the tick; while scrolling the tick
+  moves to `exit_threshold`, shown as OUT).
+- SCROLL and a state: IDLE (not in the pose), ARMING (in the pose, waiting for the
+  debounce), SCROLLING, GRACE (the pose reads poorly; fading out), COOLDOWN (after a
+  flick) or BLOCKED (after No hand, until the pose is formed again).
+- OFFSET: the smoothed distance of the fingertips above (UP) or below (DOWN) the
   anchor, in hand sizes, against the deadzone tick.
 - RATE: the scroll speed in pixels per second against `max_speed`.
+- FLICK: how fast the fingertips moved over the last flick window, in hand sizes per
+  second, against `flick_speed`.
 
-If your relaxed two-finger pose does not reach the TWO tick, lower `score_threshold`, or
-lower `finger_extended` (raised fingers read short) or raise `finger_curled` (curled
-fingers read long). If a Pointer pose starts scrolling, do the opposite. If the page
-moves while you hold still, widen `deadzone`; if it is too slow or too fast, change
-`gain` (pixels per second for each hand size past the deadzone) and `max_speed`. If the
-direction is the wrong way round on your Mac, set `invert = true`.
+The terminal also gets one line a second with the same numbers, to copy into an issue:
+
+```text
+scroll: scrolling two=0.97 entry=0.50 exit=0.30 offset=+0.35 deadzone=0.15 speed=+500px/s flick=+0.02/3.0
+```
+
+What to change:
+
+- The pose does not start: TWO stays under its tick. Lower `score_threshold`. If the
+  score drops when the fingers point at the camera, lower `exit_threshold` or raise
+  `grace_ms`. If a Pointer pose or a half-open hand starts scrolling, raise
+  `score_threshold` or `separation` (how much further out the two fingertips must be
+  than ring and pinky, in hand sizes).
+- Raised fingers read folded: lower `tip_curled` or `finger_curled`. Curled ring and
+  pinky read open: raise `tip_open` or `finger_open`. `pair_gap` is how close the two
+  fingertips must be to count as one pair.
+- The speed: `deadzone` is the still zone, `ease` how gently the speed starts past it,
+  `gain` the pixels per second for each hand size past the deadzone and `max_speed` the
+  cap. If the speed still wobbles, lower `min_cutoff` (steadier) or `beta`; if it lags
+  when you stop, raise them.
+- The flick: if quick moves do not flick, lower `flick_speed` or `flick_min_travel`; if
+  ordinary moves flick, raise them, or set `mode = "continuous"`. `flick_pixels` is the
+  size of one step (see the limits below), `flick_window_ms` the time a flick is measured
+  over, `flick_cooldown_ms` the pause after it.
+- The direction is the wrong way round on your Mac: set `invert = true`.
 
 ## Config reference
 
@@ -367,14 +406,29 @@ uv run airmouse --print-config > ~/.config/airmouse/config.toml
 | `[clutch] finger_open` | `1.4` | This ratio or more is an open finger. The finger curl is the least curled finger. |
 | `[clutch] pinch_gap` | `0.1` | A thumb tip closer than this many hand sizes to the index tip is a Pinch, never a Fist. A thumb tucked over the fingers further away is still a Fist. |
 | `[clutch] debounce_ms` | `100.0` | Milliseconds a Fist must last to become the clutch. |
-| `[scroll] deadzone` | `0.15` | A vertical offset from the anchor of this many hand sizes or less does not scroll. 0 to 2. |
-| `[scroll] gain` | `2500.0` | Pixels per second of scroll for each hand size past the deadzone, 1 to 50000. |
-| `[scroll] max_speed` | `1500.0` | The scroll speed never goes above this many pixels per second, 1 to 20000. |
-| `[scroll] invert` | `false` | `false`: Hand up scrolls up (content above comes into view). `true`: the other way. |
-| `[scroll] score_threshold` | `0.5` | The two-finger pose counts when its score, from 0 to 1, reaches this. 0.01 to 1. |
-| `[scroll] finger_curled` | `1.0` | A fingertip this many hand sizes from the wrist or closer is fully curled (ring and pinky score 1, index and middle 0). Must be below `finger_extended`. |
-| `[scroll] finger_extended` | `1.4` | A fingertip this many hand sizes from the wrist or farther is fully raised (index and middle score 1, ring and pinky 0). |
-| `[scroll] debounce_ms` | `120.0` | Milliseconds the two-finger pose must last before scrolling starts, so passing through it does not scroll. |
+| `[scroll] mode` | `"auto"` | `"auto"`: a held offset scrolls continuously and a quick flick scrolls one step, never both for one motion. `"continuous"`: no flick. `"flick"`: only flicks. |
+| `[scroll] invert` | `false` | `false`: Hand up scrolls up (content above comes into view). `true`: the other way, for both motions. |
+| `[scroll] deadzone` | `0.15` | Hand sizes of offset from the anchor that do not scroll. 0 to 2. |
+| `[scroll] ease` | `0.15` | Hand sizes past the deadzone over which the speed eases in (a smoothstep) to the linear rate; 0 for none. 0 to 2. |
+| `[scroll] gain` | `2500.0` | Pixels per second for each hand size past the deadzone. 1 to 50000. |
+| `[scroll] max_speed` | `1500.0` | The continuous speed cap, in pixels per second. 1 to 20000. |
+| `[scroll] min_cutoff` | `0.5` | The Scroll's own One Euro filter on the offset: cutoff in Hz when the hand is still. Lower is steadier, higher responds faster. 0.01 to 30. |
+| `[scroll] beta` | `0.3` | Hz added to that cutoff per hand size per second, so fast moves lag less. 0 to 100. |
+| `[scroll] score_threshold` | `0.5` | The two-finger score, from 0 to 1, needed to start a scroll. 0.01 to 1. |
+| `[scroll] exit_threshold` | `0.3` | The score needed to keep a scroll going. 0.01 to 1, at most `score_threshold`. |
+| `[scroll] debounce_ms` | `120.0` | Milliseconds the pose must last before a scroll starts, so passing through it does not scroll. 0 to 2000. |
+| `[scroll] grace_ms` | `250.0` | Milliseconds the score may stay under `exit_threshold` (the scroll fades out meanwhile) before the scroll ends. 0 to 2000. |
+| `[scroll] tip_curled` | `-0.5` | Hand sizes a fingertip lies past its own base along the hand's axis: this or less is fully curled. Must be below `tip_open`. -2 to 2. |
+| `[scroll] tip_open` | `0.0` | This or more is fully open. Index and middle count as raised if this or the ratio says so; ring and pinky count as curled if this or the ratio says so. -2 to 2. |
+| `[scroll] finger_curled` | `1.0` | Wrist-to-tip over wrist-to-base ratio at or below which a finger is fully curled. Must be below `finger_open`. 0 to 3. |
+| `[scroll] finger_open` | `1.4` | The ratio at or above which a finger is fully open. 0 to 3. |
+| `[scroll] pair_gap` | `0.3` | Hand sizes: index and middle tips closer than this are read as one pair (the better of the two counts), so overlapping fingers still count. 0 to 2. |
+| `[scroll] separation` | `0.5` | Hand sizes the pair's tips must lie further out along the hand than ring and pinky for full marks (none at half of it). 0.01 to 3. |
+| `[scroll] flick_speed` | `3.0` | Hand sizes per second over the flick window that make a flick. 0.1 to 50. |
+| `[scroll] flick_min_travel` | `0.3` | Hand sizes the fingertips must also travel within the window. 0.01 to 3. |
+| `[scroll] flick_window_ms` | `150.0` | Milliseconds a flick is measured over; also how long `"auto"` waits before a continuous scroll starts. 10 to 1000. |
+| `[scroll] flick_pixels` | `600` | Pixels one flick scrolls, as one scroll wheel event. 1 to 10000. |
+| `[scroll] flick_cooldown_ms` | `500.0` | Milliseconds after a flick in which nothing scrolls. 0 to 5000. |
 
 Example `config.toml` for an overhead camera and a smaller Active region:
 
@@ -468,6 +522,12 @@ Known limits:
 - The Scroll's pose thresholds and speeds were tuned on synthetic landmarks too, and its
   scroll events have only been tested with fakes. Tune it with `--debug-gestures` and
   `[scroll]`.
+- Whether one 600-pixel scroll event moves exactly one item in Instagram Reels or YouTube
+  Shorts in Safari or Chrome has not been tried. Feeds that snap each item to the
+  window move one item for a step of more than half and less than one and a half
+  windows; feeds that count wheel gestures in JavaScript may move one item per event
+  or ignore events below a threshold. If a flick moves two items, lower `flick_pixels`;
+  if it moves none, raise it.
 - Absolute mode maps to the main display only; relative mode reaches every display.
 - A Pointer aimed steeply at the camera with the index well bent (on synthetic hands:
   about 70 degrees of bend at 60 degrees of tilt) looks like a curled finger, because its

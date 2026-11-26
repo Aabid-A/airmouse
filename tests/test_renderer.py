@@ -5,7 +5,7 @@ import numpy as np
 import pytest
 
 from airmouse.config import CameraConfig, Config
-from airmouse.controller import FistReading, PalmReading, Phase, ScrollReading, State
+from airmouse.controller import FistReading, PalmReading, Phase, State
 from airmouse.frame import active_region, prepare_point, prepared_frame_size
 from airmouse.gestures import Point, is_open_palm
 from airmouse.mapping import AbsoluteMapping, mapped_region
@@ -19,6 +19,7 @@ from airmouse.renderer import (
     DEBUG_LEFT,
     DEBUG_LINE,
     DEBUG_ROW,
+    DEBUG_SCROLL_STATE_TOP,
     DEBUG_SCROLL_TOP,
     DEBUG_TOP,
     DEFAULT_VIEW,
@@ -43,6 +44,7 @@ from airmouse.renderer import (
     stage_for,
     to_canvas,
 )
+from airmouse.scroll import ScrollReading, ScrollState
 from anatomy import closing_fist, synthetic_hand
 from hands import open_hand, pinched, placed, pointing_hand
 from png import decode_png
@@ -98,17 +100,26 @@ def reading(score: float | None, speed: float | None, *, counts: bool, steady: b
 
 
 def scroll_reading(
-    score: float | None, *, offset: float | None = None, speed: float = 0.0
+    score: float | None,
+    *,
+    offset: float | None = None,
+    speed: float = 0.0,
+    flick: float | None = None,
+    state: ScrollState | None = None,
 ) -> ScrollReading:
+    scrolling = offset is not None
     return ScrollReading(
+        state=state or (ScrollState.SCROLLING if scrolling else ScrollState.IDLE),
         score=score,
         threshold=0.5,
-        counts=score is not None and score >= 0.5,
-        scrolling=offset is not None,
+        exit_threshold=0.3,
+        counts=score is not None and score >= (0.3 if scrolling else 0.5),
         offset=offset,
         deadzone=0.15,
         speed=speed,
         max_speed=1500.0,
+        flick=flick if scrolling else None,
+        flick_speed=3.0,
     )
 
 
@@ -162,7 +173,7 @@ def debug_cases() -> dict[str, Image]:
                 reading(0.0, 0.3, counts=False, steady=True),
                 TIMINGS,
                 FistReading(0.0, 0.6, counts=False, clutch=False, curl=0.0, hold_threshold=0.3),
-                scroll_reading(0.92, offset=0.35, speed=500.0),
+                scroll_reading(0.92, offset=0.35, speed=500.0, flick=0.4),
             ),
         ),
         "debug_no_hand": render_preview(
@@ -852,8 +863,8 @@ def test_the_two_finger_bar_shows_the_score_against_its_threshold() -> None:
 
 
 def test_the_offset_and_rate_bars_fill_only_while_scrolling() -> None:
-    offset_top = DEBUG_SCROLL_TOP + DEBUG_ROW + DEBUG_BAR_OFFSET
-    rate_top = DEBUG_SCROLL_TOP + 2 * DEBUG_ROW + DEBUG_BAR_OFFSET
+    offset_top = DEBUG_SCROLL_STATE_TOP + DEBUG_LINE + DEBUG_BAR_OFFSET
+    rate_top = offset_top + DEBUG_ROW
     idle = render_preview(State.ACTIVE, debug=scroll_debug(scroll_reading(0.9)))
     moving = render_preview(
         State.ACTIVE, debug=scroll_debug(scroll_reading(0.9, offset=-0.5, speed=-750.0))
@@ -864,6 +875,37 @@ def test_the_offset_and_rate_bars_fill_only_while_scrolling() -> None:
         assert filled_width(idle, top, TEXT_PAUSED) == 0
     assert filled_width(moving, offset_top, TEXT_ACTIVE) == DEBUG_BAR_WIDTH // 2 - 1  # the tick
     assert filled_width(moving, rate_top, TEXT_ACTIVE) == DEBUG_BAR_WIDTH // 2
+
+
+def test_the_flick_bar_shows_the_flick_measure_against_the_flick_speed() -> None:
+    flick_top = DEBUG_SCROLL_STATE_TOP + DEBUG_LINE + 2 * DEBUG_ROW + DEBUG_BAR_OFFSET
+    slow = render_preview(
+        State.ACTIVE, debug=scroll_debug(scroll_reading(0.9, offset=0.0, flick=1.5))
+    )
+    fast = render_preview(
+        State.ACTIVE, debug=scroll_debug(scroll_reading(0.9, offset=0.0, flick=-6.0))
+    )
+
+    assert filled_width(slow, flick_top, TEXT_PAUSED) == DEBUG_BAR_WIDTH // 4
+    assert filled_width(fast, flick_top, TEXT_ACTIVE) == DEBUG_BAR_WIDTH - 1  # less the tick
+
+
+def test_the_scroll_state_line_changes_with_the_state_and_nothing_else_moves() -> None:
+    def draw(state: ScrollState) -> Image:
+        return render_preview(
+            State.ACTIVE, debug=scroll_debug(scroll_reading(0.9, offset=0.0, state=state))
+        )
+
+    images = {state: draw(state) for state in ScrollState}
+    line = slice(DEBUG_SCROLL_STATE_TOP * WIDTH * 3, (DEBUG_SCROLL_STATE_TOP + 8) * WIDTH * 3)
+    scrolling = images[ScrollState.SCROLLING]
+
+    for state, image in images.items():
+        if state is not ScrollState.SCROLLING:
+            assert image.pixels[line] != scrolling.pixels[line]
+        if state in (ScrollState.GRACE, ScrollState.COOLDOWN):  # still scrolling: same marks
+            assert image.pixels[: line.start] == scrolling.pixels[: line.start]
+    assert TEXT_ACTIVE in colours_in(scrolling)
 
 
 def test_the_scroll_readout_sits_below_the_fist_and_leaves_everything_above() -> None:

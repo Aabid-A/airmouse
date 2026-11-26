@@ -15,6 +15,7 @@ from typing import Any, cast
 DEFAULT_CONFIG_PATH = Path("~/.config/airmouse/config.toml")
 
 CONTROL_MODES = ("relative", "absolute")
+SCROLL_MODES = ("auto", "continuous", "flick")
 ROTATIONS = (0, 90, 180, 270)
 
 
@@ -183,28 +184,60 @@ class OpenPalmConfig:
 class ScrollConfig:
     """The Scroll: index and middle raised together, ring and pinky curled, then the Hand
     moved up or down from where the pose started (the anchor). Works in both control modes.
+    Distances are in hand sizes (wrist to the middle finger's base).
 
-    Pose: each finger is scored by how far its tip is from the wrist, in hand sizes. A
-    raised finger (index, middle) earns 0 at `finger_curled` or less and 1 at
-    `finger_extended` or more; a curled finger (ring, pinky) the other way round. The
-    two-finger score is the weakest of the four and counts at `score_threshold` or more,
-    held for `debounce_ms` before scrolling starts. The defaults are loose, so a relaxed
-    two-finger pose counts; `--debug-gestures` shows the score for tuning.
+    `mode`: "auto" (the default) scrolls continuously for a slow, held offset and posts
+    one flick step for a quick move, never both for one motion; "continuous" never
+    flicks; "flick" only flicks.
 
-    Motion: rate-based. A vertical offset from the anchor of `deadzone` hand sizes or
-    less does nothing; past it the speed is `gain` pixels per second for each hand size
-    beyond the deadzone, capped at `max_speed` pixels per second. The Hand up scrolls up
-    (content above comes into view); `invert = true` flips that.
+    Pose: `score_threshold` (0 to 1) to start, held for `debounce_ms`; once scrolling the
+    score only has to stay at `exit_threshold` (at most `score_threshold`). Below it for
+    up to `grace_ms` the scroll fades out but carries on if the pose comes back. Each
+    finger is read like the Fist's (see `ClutchConfig`): a tip `tip_curled` or less past
+    its base is curled and `tip_open` or more open; a wrist-to-tip over wrist-to-base
+    ratio of `finger_curled` or less is curled and `finger_open` or more open. Index and
+    middle tips closer than `pair_gap` count as a pair (the better of the two), and the
+    pair's tips must lie `separation` further out along the hand than ring and pinky for
+    full marks (half of it for none). The defaults are loose; `--debug-gestures` shows
+    the score.
+
+    Continuous: the offset from the anchor is smoothed by a One Euro filter (`min_cutoff`
+    Hz, `beta` Hz per hand size per second). `deadzone` or less does nothing; past it the
+    speed eases in over `ease` (a smoothstep) to `gain` pixels per second for each hand
+    size beyond the deadzone, capped at `max_speed` pixels per second.
+
+    Flick: at least `flick_speed` hand sizes per second and `flick_min_travel` hand sizes
+    of vertical travel within the last `flick_window_ms` posts one scroll of
+    `flick_pixels` pixels; then nothing scrolls for `flick_cooldown_ms`, and the next
+    flick waits until the Hand has settled inside the deadzone for a flick window.
+
+    Direction: the Hand up scrolls up (content above comes into view); `invert = true`
+    flips both the continuous scroll and the flick.
     """
 
+    mode: str = _bounded("auto", choices=SCROLL_MODES)
+    invert: bool = False
     deadzone: float = _bounded(0.15, low=0.0, high=2.0)
+    ease: float = _bounded(0.15, low=0.0, high=2.0)
     gain: float = _bounded(2500.0, low=1.0, high=50000.0)
     max_speed: float = _bounded(1500.0, low=1.0, high=20000.0)
-    invert: bool = False
+    min_cutoff: float = _bounded(0.5, low=0.01, high=30.0)
+    beta: float = _bounded(0.3, low=0.0, high=100.0)
     score_threshold: float = _bounded(0.5, low=0.01, high=1.0)  # above 0: a score of 0 never counts
-    finger_curled: float = _bounded(1.0, low=0.0, high=3.0)
-    finger_extended: float = _bounded(1.4, low=0.0, high=3.0)
+    exit_threshold: float = _bounded(0.3, low=0.01, high=1.0)
     debounce_ms: float = _bounded(120.0, low=0.0, high=2000.0)
+    grace_ms: float = _bounded(250.0, low=0.0, high=2000.0)
+    tip_curled: float = _bounded(-0.5, low=-2.0, high=2.0)
+    tip_open: float = _bounded(0.0, low=-2.0, high=2.0)
+    finger_curled: float = _bounded(1.0, low=0.0, high=3.0)
+    finger_open: float = _bounded(1.4, low=0.0, high=3.0)
+    pair_gap: float = _bounded(0.3, low=0.0, high=2.0)
+    separation: float = _bounded(0.5, low=0.01, high=3.0)
+    flick_speed: float = _bounded(3.0, low=0.1, high=50.0)
+    flick_min_travel: float = _bounded(0.3, low=0.01, high=3.0)
+    flick_window_ms: float = _bounded(150.0, low=10.0, high=1000.0)
+    flick_pixels: int = _bounded(600, low=1, high=10000)
+    flick_cooldown_ms: float = _bounded(500.0, low=0.0, high=5000.0)
 
 
 @dataclass(frozen=True)
@@ -290,8 +323,13 @@ def _build(raw: Mapping[str, Any]) -> Config:
         raise ConfigError("clutch.tip_curled: must be below clutch.tip_open")
     if clutch.hold_threshold > clutch.score_threshold:
         raise ConfigError("clutch.hold_threshold: must be at most clutch.score_threshold")
-    if config.scroll.finger_curled >= config.scroll.finger_extended:
-        raise ConfigError("scroll.finger_curled: must be below scroll.finger_extended")
+    scroll = config.scroll
+    if scroll.finger_curled >= scroll.finger_open:
+        raise ConfigError("scroll.finger_curled: must be below scroll.finger_open")
+    if scroll.tip_curled >= scroll.tip_open:
+        raise ConfigError("scroll.tip_curled: must be below scroll.tip_open")
+    if scroll.exit_threshold > scroll.score_threshold:
+        raise ConfigError("scroll.exit_threshold: must be at most scroll.score_threshold")
     return config
 
 

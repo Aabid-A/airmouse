@@ -30,20 +30,13 @@ from typing import TextIO
 from airmouse.calibrate import region_for
 from airmouse.camera import Camera, CameraError
 from airmouse.config import Config
-from airmouse.controller import (
-    Controller,
-    FistReading,
-    Output,
-    PalmReading,
-    Phase,
-    ScrollReading,
-    State,
-)
+from airmouse.controller import Controller, FistReading, Output, PalmReading, Phase, State
 from airmouse.displays import Display, Screen
 from airmouse.frame import Frame, Region, prepare_frame
 from airmouse.gestures import Point
 from airmouse.output import OutputError
 from airmouse.renderer import FrameView
+from airmouse.scroll import ScrollReading
 from airmouse.tracker import Tracker
 
 MAX_MISSED_FRAMES = 100  # this many empty reads in a row means the camera has gone

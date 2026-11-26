@@ -46,7 +46,7 @@ The four fingers held upright and extended, together or spread, scored from 0 to
 _Avoid_: Stop sign, high five
 
 **Scroll**:
-The Gesture of holding the index and middle fingers up together and moving the Hand up or down from where it started. Rate-based: past a deadzone, the further from the start (the anchor), the faster the page moves, up to a cap (`[scroll]`). Hand up scrolls up unless `invert` is set. While scrolling the cursor holds still and no button is pressed. Works in both control modes. The Preview says SCROLL.
+The Gesture of holding the index and middle fingers up together and moving the Hand up or down from where it started. Held away from the start (the anchor) it scrolls steadily, faster the further past a deadzone, up to a cap; flicked quickly it scrolls one big step (a **flick**) and then pauses briefly (`[scroll]`). Hand up scrolls up unless `invert` is set. While scrolling the cursor holds still and no button is pressed. Works in both control modes. The Preview says SCROLL.
 _Avoid_: swipe, pan
 
 **Hold ring**:

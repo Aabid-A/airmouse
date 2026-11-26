@@ -107,19 +107,22 @@ class QuartzOutput:
         quartz = self._quartz
         unit = quartz.kCGScrollEventUnitPixel
         with self._lock:
-            self._send(quartz.CGEventCreateScrollWheelEvent(None, unit, 1, pixels))
+            self._send(quartz.CGEventCreateScrollWheelEvent(None, unit, 1, pixels), "scroll")
 
     def _post(self, kind: int, x: float, y: float) -> None:
         quartz = self._quartz
         self._last = (x, y)
         point = (self._origin[0] + x, self._origin[1] + y)
-        self._send(quartz.CGEventCreateMouseEvent(None, kind, point, quartz.kCGMouseButtonLeft))
+        self._send(
+            quartz.CGEventCreateMouseEvent(None, kind, point, quartz.kCGMouseButtonLeft), "mouse"
+        )
 
-    def _send(self, event: Any) -> None:
+    def _send(self, event: Any, kind: str) -> None:
+        """Post `event`, or say which `kind` of event macOS refused to create."""
         quartz = self._quartz
         if event is None:
             raise OutputError(
-                "macOS refused to create a mouse event. Check the Accessibility permission "
+                f"macOS refused to create a {kind} event. Check the Accessibility permission "
                 "for your terminal app in System Settings > Privacy & Security."
             )
         quartz.CGEventPost(quartz.kCGHIDEventTap, event)
