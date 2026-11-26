@@ -162,10 +162,11 @@ Details that matter in use:
   leaves that shape, so the same palm cannot pause it again at once.
 - The Scroll has two motions (`[scroll] mode`, default `"auto"`):
   - **Continuous**, like a joystick. Where the knuckles of the two fingers are when
-    scrolling starts is the anchor, and distances are in the hand size at that moment. Within 0.15 hand sizes of it (`deadzone`) nothing scrolls; past it the
-    speed eases in smoothly and grows with the distance, up to 1500 pixels per second
-    (`max_speed`). Back at the anchor it stops. The distance is smoothed, so a shaky hand
-    does not make the speed wobble.
+    scrolling starts is the anchor, and distances are in the hand size at that moment.
+    Within 0.15 hand sizes of it (`deadzone`) nothing scrolls; past it the speed eases
+    in smoothly and grows with the distance, up to 1500 pixels per second
+    (`max_speed`). Back at the anchor it stops. The distance is smoothed, so a shaky
+    hand does not make the speed wobble.
   - **Flick**: a quick move up or down from the anchor (3 hand sizes per second over
     0.3 hand sizes or more) scrolls one step of 600 pixels at once, then nothing scrolls
     for 0.5 s (`flick_cooldown_ms`), so the hand can come back without scrolling the
@@ -344,6 +345,12 @@ What to change:
   `grace_ms`. If a Pointer pose or a half-open hand starts scrolling, raise
   `score_threshold` or `separation` (how much further out the two fingertips must be
   than ring and pinky, in hand sizes).
+- `separation` is 0.7 so a steeply tilted open palm stays clear of the pose. The cost:
+  a very relaxed two-finger pose, or one with the thumb out, drops out earlier when
+  tilted towards the camera (on synthetic hands, a relaxed pose with the thumb out
+  scores 0.58 at 55 degrees and 0.31 at 60, so it can no longer start there, where 0.5
+  gave 1.0 and 0.83). If that is your pose, lower `separation` towards 0.5, at the cost
+  of a smaller margin against a tilted open palm.
 - Raised fingers read folded: lower `tip_curled` or `finger_curled`. Curled ring and
   pinky read open: raise `tip_open` or `finger_open`. `pair_gap` is how close the two
   fingertips must be to count as one pair.
@@ -530,6 +537,9 @@ Known limits:
   in the picture, so tilting while scrolling scrolls down a little (on synthetic hands, a
   sweep to 75 degrees and back at the anchor scrolled about 1000 pixels down, half of
   what following the fingertips did). Keep the wrist height steady, or widen `deadzone`.
+- The Scroll follows the knuckles because they move less than the fingertips when the
+  fingers tilt. How steady the knuckle landmarks are under real jitter and lighting is
+  not known yet: the synthetic jitter is the same for every landmark.
 - In relative mode, relaxed two fingers tilted to about 70 degrees read as a Fist. A dip
   shorter than 100 ms is ignored, but held there the clutch takes over and ends the
   scroll. If that happens, raise `[clutch] score_threshold` or lower `[clutch] tip_curled`

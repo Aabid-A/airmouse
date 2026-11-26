@@ -24,7 +24,14 @@ from airmouse.config import (
     load_config,
 )
 from airmouse.controller import Controller, State
-from airmouse.gestures import Landmarks, fist_score, hand_size, is_open_palm, two_finger_score
+from airmouse.gestures import (
+    Landmarks,
+    fist_score,
+    hand_size,
+    is_open_palm,
+    scroll_point,
+    two_finger_score,
+)
 from airmouse.mapping import make_cursor_path
 from airmouse.output import OutputError, QuartzOutput
 from airmouse.pipeline import ControllerStatus, ShutdownOutput
@@ -59,8 +66,8 @@ NOT_TWO_FINGER_POSES = [
     "pinch others open",
 ]
 VIEWS = [(pitch, roll) for pitch in (-20.0, 0.0, 20.0) for roll in (-20.0, 0.0, 20.0)]
-ROLLS = (-30.0, -20.0, 0.0, 20.0, 30.0)
-SEEDS = 6
+ROLLS = (-30.0, -15.0, 0.0, 15.0, 30.0)
+SEEDS = 12
 PITCH_SWEEP = [float(pitch) for pitch in range(-30, 80, 5)]
 TOWARDS_CAMERA = [40.0, 45.0, 50.0, 55.0, 60.0, 65.0, 70.0, 75.0]
 
@@ -174,21 +181,32 @@ def test_a_relaxed_two_finger_pose_counts(name: str, pitch: float, roll: float) 
 
 
 @pytest.mark.parametrize("name", NOT_TWO_FINGER_POSES)
-@pytest.mark.parametrize("pitch", PITCH_SWEEP)
-def test_no_other_hand_shape_comes_near_the_thresholds_at_any_tilt(name: str, pitch: float) -> None:
+@pytest.mark.parametrize("pitch", [pitch for pitch in PITCH_SWEEP if pitch <= 70])
+def test_no_other_hand_shape_comes_near_the_thresholds_up_to_70_degrees(
+    name: str, pitch: float
+) -> None:
     for roll in ROLLS:
         for seed in range(SEEDS):
-            hand = synthetic_hand(name, pitch=pitch, roll=roll, jitter=0.004, seed=seed)
-            score = two_finger_score(hand)
+            hand = synthetic_hand(name, size=SIZE, pitch=pitch, roll=roll, jitter=0.004, seed=seed)
 
-            # Up to 65 degrees: below the exit threshold with a margin. Steeper, the Hand is
-            # so foreshortened that the jitter is a large part of it, and a single frame of
-            # an open palm (together or thumb tucked) can reach about 0.3 at 70 to 75
-            # degrees: still below the exit threshold, and far from the entry one.
-            if pitch <= 65:
-                assert score <= DEFAULT.exit_threshold - MARGIN
-            else:
-                assert score < DEFAULT.exit_threshold
+            # Below the exit threshold with a margin, so none can start or keep a scroll.
+            assert two_finger_score(hand) <= DEFAULT.exit_threshold - MARGIN
+
+
+@pytest.mark.parametrize("name", NOT_TWO_FINGER_POSES)
+def test_at_75_degrees_no_other_shape_reads_as_two_fingers_two_frames_running(name: str) -> None:
+    # At 75 degrees the Hand is so foreshortened that the jitter is a large part of it:
+    # single frames of an open palm (together or thumb tucked) can score up to about
+    # 0.55. They never come two frames in a row, and a scroll needs the pose for the
+    # whole debounce (4 frames), so none starts (see the next test).
+    for roll in ROLLS:
+        run = longest = 0
+        for frame in range(300):
+            hand = synthetic_hand(name, size=SIZE, pitch=75.0, roll=roll, jitter=0.004, seed=frame)
+            run = run + 1 if two_finger_score(hand) >= DEFAULT.score_threshold else 0
+            longest = max(longest, run)
+
+        assert longest <= 1
 
 
 @pytest.mark.parametrize("name", NOT_TWO_FINGER_POSES)
@@ -242,6 +260,17 @@ def test_the_pair_takes_the_better_finger_only_when_the_tips_are_together() -> N
 
     assert two_finger_score(hidden) < DEFAULT.exit_threshold
     assert two_finger_score(together) >= DEFAULT.score_threshold
+
+
+def test_the_scroll_follows_the_two_knuckles_not_the_fingertips() -> None:
+    hand = synthetic_hand("two fingers")
+    moved = list(hand)
+    for tip in (8, 12):  # only the fingertips move, as when the fingers tilt
+        moved[tip] = (hand[tip][0] + 0.05, hand[tip][1] + 0.1)
+
+    expected = ((hand[5][0] + hand[9][0]) / 2, (hand[5][1] + hand[9][1]) / 2)
+    assert scroll_point(hand) == pytest.approx(expected)
+    assert scroll_point(moved) == pytest.approx(expected)
 
 
 @pytest.mark.parametrize("name", TWO_FINGER_POSES)
@@ -394,6 +423,56 @@ def test_returning_to_the_anchor_stops_the_scroll() -> None:
 
     assert rig.output.events == []
     assert rig.controller.scrolling
+
+
+@pytest.mark.parametrize(
+    ("name", "limit"),
+    # Following the fingertips scrolls about 1900 and 1550 pixels down here; the
+    # knuckles about 1030 and 410 (synthetic hands).
+    [("two fingers", 1300), ("two fingers relaxed", 700)],
+)
+def test_tilting_the_fingers_at_a_steady_height_scrolls_down_only_a_little(
+    name: str, limit: int
+) -> None:
+    rig = Rig()
+    rig.start_scroll()
+    pitches = [0, 20, 40, 55, 65, 75, 65, 55, 40, 20, 0]
+    if name == "two fingers relaxed":
+        pitches = [0, 20, 40, 50, 60, 50, 40, 20, 0]  # beyond 60 it reads as a Fist
+    frame = 0
+
+    for pitch in pitches:
+        for _ in range(6):
+            rig.frame(
+                synthetic_hand(
+                    name, size=SIZE, centre=(0.5, WRIST_Y), pitch=pitch, jitter=0.004, seed=frame
+                )
+            )
+            frame += 1
+
+    assert rig.controller.scrolling
+    assert -limit <= rig.scrolled() <= 0
+
+
+def shrunk(hand: Landmarks, scale: float) -> Landmarks:
+    """The Hand `scale` times its size about its own knuckles, as when it moves away from
+    the camera (smaller) or towards it (larger), with the knuckles where they were."""
+    cx, cy = scroll_point(hand)
+    return [(cx + (x - cx) * scale, cy + (y - cy) * scale) for x, y in hand]
+
+
+@pytest.mark.parametrize("scale", [0.8, 1.25])
+def test_a_hand_that_looks_smaller_or_larger_mid_scroll_keeps_its_speed(scale: float) -> None:
+    rig = Rig()
+    rig.start_scroll()
+    rig.settle(two(up=0.5))
+    steady = rig.controller.scroll_reading.speed
+
+    rig.settle(shrunk(two(up=0.5), scale))  # the same height, a different apparent size
+
+    # Measured in the live hand size instead, the offset would grow or shrink by the
+    # scale (about 25%), and the speed with it.
+    assert rig.controller.scroll_reading.speed == pytest.approx(steady, rel=0.03)
 
 
 def test_the_anchor_is_where_the_pose_started_not_the_screen() -> None:

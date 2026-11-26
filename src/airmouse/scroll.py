@@ -1,7 +1,8 @@
 """The Scroll's motion: from the two-finger pose and the Hand's height to scroll events.
 
-The Controller decides when scrolling is allowed at all (active, no Pinch, no Fist,
-no Open palm) and feeds every frame here. `Scroll` owns the rest:
+The Controller decides when scrolling is allowed at all (active, no closed Pinch, no
+clutch, that is no Fist held for `clutch.debounce_ms`, and no Open palm) and feeds every
+frame here. `Scroll` owns the rest:
 
 - Entry: the two-finger score reaches `score_threshold` for `debounce_ms`. The anchor
   is then the midpoint of the index and middle knuckles (`scroll_point`), and offsets
