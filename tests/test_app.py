@@ -1,25 +1,20 @@
 import io
 import os
+import threading
 from pathlib import Path
 from typing import Any, NoReturn
 
 import numpy as np
 import pytest
 
-from airmouse.app import (
-    DEFAULT_DISPLAY,
-    MAX_MISSED_FRAMES,
-    FpsMeter,
-    StageTimes,
-    camera_on_line,
-    run_preview,
-)
+from airmouse.app import DEFAULT_DISPLAY, camera_on_line, run_preview
 from airmouse.camera import CameraError
 from airmouse.config import CameraConfig, Config
 from airmouse.controller import State
 from airmouse.frame import active_region
 from airmouse.gestures import Landmarks
 from airmouse.mapping import mapped_region
+from airmouse.pipeline import MAX_MISSED_FRAMES, FpsMeter, StageTimes
 from airmouse.renderer import (
     BACKGROUND,
     CAMERA_ON_DOT,
@@ -39,21 +34,19 @@ from airmouse.renderer import (
     render_preview,
 )
 from hands import open_hand, pointing_hand
+from lockstep import WAIT_S, ThreadClock, join_worker, lockstep
 
 FRAME_S = 1 / 30
 
 
 class FakeCamera:
-    def __init__(self, frames: int | None = None, error: BaseException | None = None) -> None:
+    def __init__(self, frames: int | None = None) -> None:
         self.frames = frames  # None: frames forever
-        self.error = error
         self.reads = 0
         self.released = False
 
     def read(self) -> Any:
         self.reads += 1
-        if self.error is not None and self.reads > 2:
-            raise self.error
         if self.frames is not None and self.reads > self.frames:
             return None
         return np.full((480, 640, 3), 123, dtype=np.uint8)
@@ -126,16 +119,17 @@ def run(
     config: Config | None = None,
 ) -> tuple[int, str]:
     out = io.StringIO()
+    stepped_camera, stepped_window = lockstep(camera, window)
     status = run_preview(
         config or Config(),
-        camera,
+        stepped_camera,
         tracker or FakeTracker(open_hand()),
-        window,
+        stepped_window,
         show_camera_image=show_camera_image,
         calibrate=calibrate,
         debug_gestures=debug_gestures,
         clock=Clock(),
-        timer=Clock(),
+        timer=ThreadClock(FRAME_S),
         out=out,
     )
     return status, out.getvalue()
@@ -153,9 +147,18 @@ def test_q_quits_and_everything_is_released() -> None:
     assert window.closed
 
 
+class InterruptedWindow(FakeWindow):
+    """Ctrl-C arrives on the main thread, which is the one showing the window."""
+
+    def show(self, image: Image) -> None:
+        super().show(image)
+        if len(self.images) >= self.quit_after:
+            raise KeyboardInterrupt
+
+
 def test_ctrl_c_quits_cleanly_and_releases_the_camera() -> None:
-    camera = FakeCamera(error=KeyboardInterrupt())
-    tracker, window = FakeTracker(None), FakeWindow(frames=100)
+    camera = FakeCamera()
+    tracker, window = FakeTracker(None), InterruptedWindow(frames=3)
 
     status, output = run(camera, window, tracker)
 
@@ -233,7 +236,10 @@ def test_the_tracker_is_fed_the_clock_time() -> None:
 
     run(FakeCamera(), FakeWindow(frames=3), tracker)
 
-    assert tracker.times == pytest.approx([FRAME_S, 2 * FRAME_S, 3 * FRAME_S])
+    assert tracker.times[:3] == pytest.approx([FRAME_S, 2 * FRAME_S, 3 * FRAME_S])
+    # The worker may track a frame more while the Preview quits; every one is the next tick.
+    expected = [FRAME_S * (index + 1) for index in range(len(tracker.times))]
+    assert tracker.times == pytest.approx(expected)
 
 
 def test_a_camera_that_stops_delivering_frames_is_an_error_and_is_released() -> None:
@@ -246,13 +252,31 @@ def test_a_camera_that_stops_delivering_frames_is_an_error_and_is_released() -> 
     assert camera.released
 
 
-def test_q_works_while_the_camera_is_giving_no_frames() -> None:
-    camera, window = FakeCamera(frames=0), FakeWindow(frames=0)
+class SilentCamera(FakeCamera):
+    """A camera that gives no frame: each read waits until the test lets it return."""
 
-    status, _ = run(camera, window)
+    def __init__(self) -> None:
+        super().__init__(frames=0)
+        self.unblocked = threading.Event()
+
+    def read(self) -> Any:
+        self.unblocked.wait(WAIT_S)
+        return super().read()
+
+
+def test_q_works_while_the_camera_is_giving_no_frames() -> None:
+    camera, window = SilentCamera(), FakeWindow(frames=0)
+
+    status = run_preview(
+        Config(), camera, FakeTracker(None), window, out=io.StringIO(), stop_timeout_s=0.01
+    )
 
     assert status == 0
-    assert camera.released
+    assert window.images == []
+    assert not camera.released  # never released under the read still waiting in it
+    camera.unblocked.set()
+    join_worker()
+    assert camera.released  # the worker released it once the read returned
 
 
 def test_no_file_is_written_while_the_preview_runs(
@@ -282,7 +306,8 @@ def test_frames_are_rotated_before_the_tracker_sees_them() -> None:
 
     run(FakeCamera(), FakeWindow(frames=1), tracker, config=config)
 
-    assert tracker.shapes == [(640, 480, 3)]
+    assert tracker.shapes[0] == (640, 480, 3)
+    assert set(tracker.shapes) == {(640, 480, 3)}
 
 
 def test_calibrate_shows_the_hand_and_the_active_region() -> None:
@@ -361,21 +386,40 @@ class PalmThenPointing:
         self.closed = True
 
 
+class MoveCountingWindow(FakeWindow):
+    """Notes how many cursor moves there were when the Preview quit."""
+
+    def __init__(self, frames: int, output: RecordingOutput) -> None:
+        super().__init__(frames)
+        self.output = output
+        self.moves_at_quit: int | None = None
+
+    def quit_requested(self) -> bool:
+        quit_requested = super().quit_requested()
+        if quit_requested and self.moves_at_quit is None:
+            self.moves_at_quit = len(self.output.moves)
+        return quit_requested
+
+
 def test_the_cursor_moves_only_once_the_open_palm_has_unpaused() -> None:
     output = RecordingOutput()
+    window = MoveCountingWindow(frames=90, output=output)
+    camera, stepped_window = lockstep(FakeCamera(), window)
 
     run_preview(
         Config(),
-        FakeCamera(),
+        camera,
         PalmThenPointing(palm_s=1.5),
-        FakeWindow(frames=90),
+        stepped_window,
         output=output,
         display=(1600.0, 1000.0),
         clock=Clock(),
         out=io.StringIO(),
     )
 
-    assert 0 < len(output.moves) < 90 - 40
+    # Counted up to the 90th frame: the worker may move once more while the Preview quits.
+    assert window.moves_at_quit is not None
+    assert 0 < window.moves_at_quit < 90 - 40
 
 
 def test_the_default_preview_has_no_gesture_readout() -> None:

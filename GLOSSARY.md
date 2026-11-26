@@ -64,3 +64,11 @@ _Avoid_: Lost, tracking failure
 **Calibrate mode**:
 `--calibrate`, a view of the Hand and the Active region used to set rotate, mirror and the region for the camera's position. Applied before the Active region is placed.
 _Avoid_: Setup wizard
+
+**Cursor path**:
+Everything from the camera to the cursor: camera read, frame preparation, the Hand tracker, the Controller and the cursor output. It runs on its own worker thread and never waits for the Preview (ADR 0004). In code it lives in `airmouse.pipeline`.
+_Avoid_: Pipeline (ambiguous), backend
+
+**Snapshot**:
+The cursor path's latest state, copied and immutable, that the Preview draws: the Hand, the Controller's state, phase and Hold ring, No hand, the debug readings and timings. Only the newest one is kept.
+_Avoid_: Frame (a camera image), message, event

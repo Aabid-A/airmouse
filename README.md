@@ -29,7 +29,7 @@ no camera image anywhere, so its Preview is safe to screen-record and share.
 
 ## How it works
 
-Each camera frame goes through one pipeline:
+Each camera frame goes through these steps:
 
 1. **Camera.** OpenCV reads a frame. The frame is rotated and mirrored as the config says,
    so a hand moved right moves right in the picture.
@@ -45,6 +45,20 @@ Each camera frame goes through one pipeline:
    label and the Camera-on indicator on a plain dark background.
 8. **Config.** Every number below comes from `~/.config/airmouse/config.toml`, with
    command-line flags on top.
+
+Steps 1 to 6 are the cursor path. They run on a worker thread, and the Renderer runs on
+the main thread, which owns the window (macOS needs window calls there). After each frame
+the worker publishes a Snapshot, an immutable copy of the latest state, into a slot that
+keeps only the newest one. The main thread draws the latest Snapshot, shows it and checks
+for `q`. Neither waits for the other: a slow window never slows the cursor, and a stalled
+camera never freezes the window, which keeps showing the last state the worker reported.
+On `q` or Ctrl-C the main thread stops the worker and waits up to a second. The worker
+lifts any held mouse button, closes the tracker and releases the camera on its way out.
+If it is stuck (in a camera read, the tracker or the output), the main thread lifts the
+button itself and shuts the output, so nothing the worker does later reaches the Mac; the
+tracker and the camera are never closed under a call still running on them, and are
+released when the worker comes back or when airmouse exits. See
+[ADR 0004](docs/adr/0004-cursor-path-on-a-worker-thread.md).
 
 Terms used in this document are defined in [GLOSSARY.md](GLOSSARY.md).
 
@@ -138,7 +152,7 @@ usage: airmouse [-h] [--version] [--config PATH] [--print-config] [--camera N]
 | `--active-region-width FRACTION` | Override `[active_region] width_fraction`. |
 | `--control-mode MODE` | Override `[control] mode`. Only `absolute` exists. |
 | `--calibrate` | Calibrate mode: see the Hand and the Active region, with no cursor input. |
-| `--debug-gestures` | Draw the Open palm score, the wrist speed and per-stage timings in the Preview. |
+| `--debug-gestures` | Draw the Open palm score, the wrist speed, per-stage timings and the tracking and window rates in the Preview. |
 | `--show-camera-image` | Debugging only. Draw the camera image behind the skeleton. See [Privacy](#privacy). |
 | `--version` | Print the version and exit. |
 
@@ -166,8 +180,18 @@ uv run airmouse --debug-gestures
 ```
 
 The Preview then draws the Open palm score against its threshold, the wrist speed against
-the steadiness tolerance, and per-stage timings in ms (CAM is the wait for the camera,
-PREP frame preparation, TRACK the Hand tracker, DRAW the Preview render, WIN the window).
+the steadiness tolerance, and a column of readings on the right:
+
+- The cursor path (worker thread), in ms: CAM is the wait for the camera, PREP frame
+  preparation, TRACK the Hand tracker, CTRL the Controller and cursor output, and FRAME
+  the time between two frames from the camera. A slow camera shows as a large CAM and
+  FRAME while the other stages stay small.
+- The window (main thread), in ms: DRAW the Preview render, WIN showing it and checking
+  for `q`.
+- TRACK FPS, frames tracked per second (the camera's rate when the tracker keeps up; the
+  FPS in the Preview's corner is the same number), and UI FPS, images the window shows
+  per second.
+
 Adjust the `[open_palm]` settings below.
 
 ## Config reference
