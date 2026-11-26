@@ -40,12 +40,13 @@ def make_path(
     screen: FakeScreen,
     *,
     gain: float = 1000.0,
-    acceleration: float = 0.0,
-    max_gain: float = 50000.0,
+    max_gain: float | None = None,
 ) -> RelativePath:
-    """A RelativePath with the filter all but switched off, so deltas can be checked exactly."""
+    """A RelativePath with the filter all but switched off, so deltas can be checked exactly.
+
+    With no `max_gain` the gain is `gain` at every speed."""
     return RelativePath(
-        RelativeConfig(gain=gain, acceleration=acceleration, max_gain=max_gain),
+        RelativeConfig(gain=gain, max_gain=gain if max_gain is None else max_gain),
         screen,
         frame_aspect=ASPECT,
         min_cutoff=1e9,
@@ -112,18 +113,9 @@ def test_sideways_and_upward_movements_of_the_same_size_move_the_cursor_the_same
     assert across == pytest.approx(up, abs=1)
 
 
-def test_acceleration_adds_gain_with_speed_up_to_the_cap() -> None:
-    path = make_path(FakeScreen(), gain=800.0, acceleration=0.5, max_gain=2000.0)
-
-    assert path.gain(0.0) == 800.0
-    assert path.gain(1.0) == 1200.0
-    assert path.gain(2.0) == 1600.0
-    assert path.gain(10.0) == 2000.0  # capped
-
-
 def test_a_fast_movement_goes_further_than_the_same_movement_made_slowly() -> None:
     def travel(frames: int) -> float:
-        feed = Feed(make_path(FakeScreen(cursor=(100.0, 400.0)), acceleration=0.5))
+        feed = Feed(make_path(FakeScreen(cursor=(100.0, 400.0)), max_gain=3000.0))
         feed(HAND)
         x = 0.0
         for frame in range(1, frames + 1):
@@ -133,7 +125,7 @@ def test_a_fast_movement_goes_further_than_the_same_movement_made_slowly() -> No
     assert travel(2) > 1.5 * travel(12)
 
 
-def test_with_no_acceleration_speed_changes_nothing() -> None:
+def test_with_max_gain_equal_to_gain_speed_changes_nothing() -> None:
     def travel(frames: int) -> float:
         feed = Feed(make_path(FakeScreen(cursor=(100.0, 400.0))))
         feed(HAND)
@@ -291,3 +283,122 @@ def test_a_cursor_pushed_against_the_outer_edge_stays_on_the_display() -> None:
 
     assert all(on_a_display(p, (MAIN, RIGHT)) for p in positions)
     assert positions[-1][0] == RIGHT.right - 1
+
+
+# --- speed-dependent gain and slow-speed smoothing (the default [relative] settings) ---
+
+DEFAULTS = RelativeConfig()
+WIDE = Display(0, 0, 100000, 900)  # room to travel far without meeting an edge
+
+
+def default_path(screen: FakeScreen, config: RelativeConfig = DEFAULTS) -> RelativePath:
+    """A RelativePath with `config`'s gain curve and its own smoothing, as the app builds it."""
+    return RelativePath(
+        config,
+        screen,
+        frame_aspect=ASPECT,
+        min_cutoff=config.min_cutoff,
+        beta=config.beta,
+        fallback=(MAIN,),
+    )
+
+
+def test_the_gain_is_low_when_slow_high_when_fast_and_capped() -> None:
+    path = default_path(FakeScreen())
+
+    assert path.gain(0.0) == path.gain(DEFAULTS.slow_speed) == DEFAULTS.gain
+    assert path.gain(DEFAULTS.fast_speed) == path.gain(100.0) == DEFAULTS.max_gain
+    middle = path.gain((DEFAULTS.slow_speed + DEFAULTS.fast_speed) / 2)
+    assert middle == pytest.approx((DEFAULTS.gain + DEFAULTS.max_gain) / 2)
+
+
+def test_the_gain_rises_monotonically_with_no_steps() -> None:
+    path = default_path(FakeScreen())
+    speeds = [step / 1000 for step in range(10001)]  # 0 to 10 hand sizes per second
+    gains = [path.gain(speed) for speed in speeds]
+
+    steps = [b - a for a, b in zip(gains, gains[1:], strict=False)]
+    assert min(steps) >= 0  # never falls
+    assert max(steps) < 2.0  # 1 ms of speed never adds more than 2 points per hand size
+    assert max(gains) == DEFAULTS.max_gain  # capped
+
+
+def test_the_gain_has_no_kink_where_the_slow_and_fast_regions_meet_the_curve() -> None:
+    path = default_path(FakeScreen())
+    tiny = 1e-4
+
+    for edge in (DEFAULTS.slow_speed, DEFAULTS.fast_speed):
+        slope_below = (path.gain(edge) - path.gain(edge - tiny)) / tiny
+        slope_above = (path.gain(edge + tiny) - path.gain(edge)) / tiny
+        assert slope_below == pytest.approx(slope_above, abs=1.0)
+
+
+def lag_seconds(speed: float) -> float:
+    """How far behind the hand the cursor runs, in seconds, at a steady `speed` (hand sizes
+    per second), with the default smoothing and a constant gain so only the filter shows."""
+    config = RelativeConfig(gain=1000.0, max_gain=1000.0)
+    feed = Feed(default_path(FakeScreen((WIDE,), cursor=(100.0, 400.0)), config))
+    step = speed * FRAME_S * SIZE / ASPECT  # sideways, in frame widths per frame
+    frames = 90
+    x = 0.0
+    for frame in range(frames + 1):
+        x = feed(placed(HAND, dx=step * frame))[0]
+    unsmoothed = speed * frames * FRAME_S * config.gain
+    return (unsmoothed - (x - 100)) / (speed * config.gain)
+
+
+def test_smoothing_is_stronger_when_the_hand_is_slow_than_when_it_is_fast() -> None:
+    slow, fast = lag_seconds(0.1), lag_seconds(3.0)
+
+    assert slow > 0.06  # a slow hand is smoothed hard: tremor stays off the cursor
+    assert fast < 0.02  # a fast hand is barely smoothed: no lag
+    assert slow > 5 * fast
+
+
+def test_the_same_movement_goes_the_same_distance_near_or_far_with_the_default_settings() -> None:
+    """Gain and smoothing both count speed in hand sizes, so distance changes neither."""
+    near, far = (Feed(default_path(FakeScreen((WIDE,), cursor=(100.0, 400.0)))) for _ in range(2))
+    shifts = [0.01 * min(frame, 15) for frame in range(46)]  # a fast move for 0.5 s, then still
+    nears = [near(placed(HAND, scale=1.5, dx=shift)) for shift in shifts]
+    fars = [far(placed(HAND, scale=0.75, dx=shift / 2)) for shift in shifts]
+
+    for a, b in zip(nears, fars, strict=True):
+        assert a == pytest.approx(b, abs=1)
+    moved = 0.15 * ASPECT / hand_size(placed(HAND, scale=1.5))  # hand sizes
+    assert nears[-1][0] - 100 > 2 * moved * DEFAULTS.gain  # well above the slow gain
+
+
+def tremor(frame: int) -> float:
+    """A small, fast shake, as frame heights: about 2% of a hand size at 10 Hz."""
+    return 0.02 * SIZE * math.sin(2 * math.pi * 10 * frame * FRAME_S + 0.3)
+
+
+def test_a_slow_small_move_gives_a_small_smooth_cursor_path() -> None:
+    """A tenth of a hand size over a second, with tremor, moves the cursor a little and
+    steadily: no shake back and forth, no jumps."""
+    feed = Feed(default_path(FakeScreen(cursor=(700.0, 400.0))))
+    distance = 0.1 * SIZE / ASPECT  # sideways, in frame widths
+    positions = [
+        feed(placed(HAND, dx=distance * min(frame, 30) / 30, dy=tremor(frame)))
+        for frame in range(46)
+    ]
+
+    xs = [x for x, _ in positions]
+    ys = [y for _, y in positions]
+    travelled = xs[-1] - 700
+    assert 0.5 * 0.1 * DEFAULTS.gain < travelled <= 0.1 * DEFAULTS.gain + 1  # about gain's worth
+    assert all(b >= a for a, b in zip(xs, xs[1:], strict=False))  # never backwards
+    assert max(b - a for a, b in zip(xs, xs[1:], strict=False)) <= 3  # small steps
+    assert max(ys) - min(ys) <= 5  # the tremor barely shows
+
+
+def test_the_first_frame_after_a_reset_moves_nothing_with_the_default_settings() -> None:
+    screen = FakeScreen(cursor=(700.0, 400.0))
+    feed = Feed(default_path(screen))
+    for frame in range(10):
+        feed(placed(HAND, dx=0.02 * frame))  # a fast move
+    feed.path.reset()  # a clutch or No hand
+    screen.cursor = (300.0, 200.0)
+
+    assert feed(placed(HAND, dx=-0.2, dy=0.1)) == (300.0, 200.0)
+    assert feed(placed(HAND, dx=-0.2, dy=0.1)) == (300.0, 200.0)  # a still hand stays still

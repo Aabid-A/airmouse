@@ -73,8 +73,10 @@ Terms used in this document are defined in [GLOSSARY.md](GLOSSARY.md).
 
 **Relative** (the default) works like a mouse or trackpad. The cursor moves by how far
 the Pointer moves, from wherever the cursor is when airmouse starts following. Movement
-is measured in hand sizes, so it feels the same near or far from the camera, and
-`[relative]` sets the gain, the acceleration and a cap. Bending or straightening the
+is measured in hand sizes, so it feels the same near or far from the camera. Like
+pointer acceleration on a mouse, a slow hand moves the cursor a little, for fine
+aiming, and a fast hand moves it a lot, to cross the screen (see *Tuning relative mode*
+below). Bending or straightening the
 index finger alone does not move the cursor; moving the hand, or swinging the finger
 sideways, does. Slow movements add up, so even a tiny one moves the cursor. The cursor moves
 across all your displays, of any size and arrangement, and stops at the outer edges of
@@ -93,6 +95,33 @@ hold_threshold` or more) the cursor holds still and the Preview says HOLD, so cl
 the fist never drags the cursor. Straighten the index (the Pointer pose) and it follows
 again. A Pointer held at an angle to the camera, or with the index a little bent, is
 not curled and never holds.
+
+#### Tuning relative mode
+
+The gain is how many display points the cursor moves for one hand size of Pointer
+movement (a hand size is the wrist to the middle finger's base, roughly 9 cm). Below
+`[relative] slow_speed` (hand sizes per second) the gain is `gain`; above `fast_speed`
+it is `max_gain`; in between it rises smoothly, with no steps. With the defaults, a slow
+careful move of a tenth of a hand size moves the cursor about 40 points, and one hand
+size moved quickly (in a third of a second or less) moves it about 2400 points.
+
+The Pointer is smoothed first, hardest when the hand is slow so a shaky hand does not
+shake the cursor, and less as it speeds up so a fast move does not lag. The smoothing
+cutoff is `min_cutoff + beta * speed` (Hz, speed in hand sizes per second). This is
+relative mode's own One Euro filter; `[filter]` applies to absolute mode only.
+
+- Fine aiming too slow, or small moves need too much hand travel: raise `gain`.
+- Fine aiming still jumpy: lower `gain`, or raise `slow_speed` so more of your careful
+  movement gets the low gain.
+- Crossing the screen takes too much arm: raise `max_gain`, or lower `fast_speed` so the
+  full gain comes sooner.
+- The cursor shakes while you hold still: lower `min_cutoff`. It feels sluggish on small
+  moves: raise `min_cutoff`.
+- Fast moves trail behind the hand: raise `beta`. Fast moves feel twitchy: lower it.
+
+`slow_speed` must be below `fast_speed`, and `max_gain` at least `gain`. An older config
+with `acceleration` is rejected with a message naming these keys: remove it, and set the
+new ones if the defaults do not suit you.
 
 **Absolute** maps the Active region to the main display only: the cursor goes where the
 Pointer is in the region. It works exactly as before relative mode existed: there is no
@@ -274,8 +303,8 @@ uv run airmouse --print-config > ~/.config/airmouse/config.toml
 | `[camera] mirror` | `true` | Mirror the frame left to right. Flag `--mirror` or `--no-mirror`. |
 | `[active_region] width_fraction` | `0.6` | Active region width as a fraction of the frame width, from 0 to 1. The region keeps the screen's shape and stays inside the frame. Flag `--active-region-width`. |
 | `[control] mode` | `"relative"` | `"relative"` (moves by the Pointer's movement, across all displays) or `"absolute"` (Active region to the main display). Flag `--control-mode`. |
-| `[filter] min_cutoff` | `1.0` | One Euro filter: lower is smoother when the Pointer is slow, higher is more responsive. |
-| `[filter] beta` | `0.007` | One Euro filter: how quickly the smoothing relaxes when the Pointer moves fast. Higher means less lag in fast moves. |
+| `[filter] min_cutoff` | `1.0` | Absolute mode's One Euro filter: lower is smoother when the Pointer is slow, higher is more responsive. Relative mode uses `[relative] min_cutoff`. |
+| `[filter] beta` | `0.007` | Absolute mode's One Euro filter: how quickly the smoothing relaxes when the Pointer moves fast. Higher means less lag in fast moves. Relative mode uses `[relative] beta`. |
 | `[pinch] close_threshold` | `0.25` | The Pinch closes when the thumb-to-index distance, in hand sizes, falls below this. Must be below `open_threshold`. |
 | `[pinch] open_threshold` | `0.4` | The Pinch opens again when the distance rises above this. |
 | `[pinch] click_window_ms` | `300.0` | A Pinch released within this time without the Pointer moving is a click. |
@@ -289,9 +318,12 @@ uv run airmouse --print-config > ~/.config/airmouse/config.toml
 | `[open_palm] spread_weight` | `0.05` | How much spread fingertips add to the score. With `thumb_weight`, the total must stay below 1. |
 | `[open_palm] pinch_gap` | `0.2` | A thumb tip closer than this many hand sizes to the index tip is a Pinch, never an Open palm. |
 | `[open_palm] steady_max_speed` | `2.5` | How fast the wrist may move, in hand sizes per second, for the Hold ring to keep filling. |
-| `[relative] gain` | `800.0` | Relative mode: display points the cursor moves per hand size of Pointer movement, 1 to 20000. |
-| `[relative] acceleration` | `0.5` | Relative mode: extra gain with speed. The gain is `gain * (1 + acceleration * speed)`, speed in hand sizes per second; 0 means none. 0 to 10. |
-| `[relative] max_gain` | `3000.0` | Relative mode: the gain never goes above this, however fast the hand moves. At least `gain`. |
+| `[relative] gain` | `400.0` | Relative mode: display points the cursor moves per hand size of Pointer movement when the hand is slow (at `slow_speed` or below), for fine aiming. 1 to 20000. |
+| `[relative] max_gain` | `2500.0` | Relative mode: the gain when the hand is fast (at `fast_speed` or above), and the cap. At least `gain`; equal to `gain` turns acceleration off. Up to 50000. |
+| `[relative] slow_speed` | `0.2` | Relative mode: hand speed, in hand sizes per second, up to which the gain stays at `gain`. 0 to 50, below `fast_speed`. |
+| `[relative] fast_speed` | `3.0` | Relative mode: hand speed, in hand sizes per second, from which the gain is `max_gain`. Between the two speeds the gain rises smoothly. 0.01 to 50. |
+| `[relative] min_cutoff` | `0.5` | Relative mode's One Euro filter: smoothing cutoff in Hz when the hand is still. Lower is steadier, higher is more responsive. 0.01 to 30. |
+| `[relative] beta` | `5.0` | Relative mode's One Euro filter: Hz added to the cutoff per hand size per second of speed, so the smoothing relaxes as the hand speeds up. Higher means less lag in fast moves. 0 to 100. |
 | `[clutch] score_threshold` | `0.6` | Relative mode: the Fist counts when its score, from 0 to 1, reaches this. |
 | `[clutch] hold_threshold` | `0.3` | The cursor holds still (HOLD) while the finger curl, from 0 to 1, is at this or more. At most `score_threshold`. |
 | `[clutch] tip_curled` | `-0.15` | Each finger's tip is measured along the hand's axis (wrist to the middle finger's base), past its own base, in hand sizes: this or less is fully curled. Must be below `tip_open`. |
