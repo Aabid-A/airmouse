@@ -1,6 +1,6 @@
 ---
 name: dispatch
-description: Use when the user wants several issues worked on, or asks to run the board, dispatch work, or assign agents. Acts as the orchestrator - picks a batch of unblocked issues that won't collide, builds a focused context packet for each, launches one worker per issue, tracks them to PR and review, and reports back. Merging follows the AGENTS.md Merging rules.
+description: Use when the user wants several issues worked on, or asks to run the board, dispatch work, or assign agents. Acts as the orchestrator - picks a batch of unblocked issues that won't collide, builds a focused context packet for each, launches one worker per issue, tracks them to PR and review, and reports back. Merges only by turning on GitHub auto-merge for PRs the merge policy marks safe.
 ---
 
 # Dispatch
@@ -38,7 +38,7 @@ Fill in [worker-brief.md](worker-brief.md) for each issue. Include only:
 - the issue text and acceptance criteria, and the spec it is part of, if any
 - the `GLOSSARY.md` terms and ADRs it names (paste the relevant lines, not whole files)
 - the files to start from, and the checks to run
-- for UI: the project's chosen style, any references it names, and the `ui-design` skill
+- for UI: the style mode, the named `design-references/sites/*.md`, and the `ui-design` skill
 - the skills for its type (table below)
 
 Leave out everything else: other issues, this conversation, unrelated docs.
@@ -74,11 +74,11 @@ open PR with `needs-review`.
 - Keep a short ledger: issue, worker, branch, PR, state.
 - When a PR opens, run `review-loop` on it **from a context that is not the
   worker**: a separate reviewer, not the one that wrote it.
+  When it passes, apply the merge policy (`ship` step 8): auto-merge if safe,
+  otherwise label the issue `parked` with the reason.
 - If a worker is stuck or widens scope, stop it, comment on the issue, and put
   the label back to `ready` or `blocked`.
 - When the batch is done, run `board.py` again: merged work may unblock more.
-- `board.py` reads only `Blocked by`. Before launching an issue, check each
-  `Builds on #n` PR is merged to `main`; hold the issue otherwise.
 
 ## 6. Report
 
@@ -87,8 +87,8 @@ Then suggest the next batch. Run `retro` if a worker went wrong.
 
 ## Never
 
-- Launch workers without the user's yes for that batch, or merge outside the
-  `AGENTS.md` Merging rules.
+- Merge by hand, or auto-merge a PR the merge policy parks.
+- Launch workers without the user's yes for that batch.
 - Give two workers overlapping files.
 - Hand a worker the whole conversation; give it the packet.
 - Report a PR as done when checks or review haven't passed.

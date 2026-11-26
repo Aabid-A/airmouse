@@ -1,6 +1,6 @@
 ---
 name: ship
-description: Use when a code change is done and proven and the task calls for a pull request. Commits, rebases, pushes, opens the PR with evidence, runs the review loop, and ends by giving the PR URL. Merges only under the AGENTS.md Merging rules.
+description: Use when a code change is done and proven and the task calls for a pull request. Commits, rebases, pushes, opens the PR with evidence, runs the review loop, and ends by giving the PR URL. Never merges.
 ---
 
 # Ship
@@ -29,15 +29,19 @@ not imply publishing.
    Write the title and body with the `pr` skill: a sketch of the change, the
    before/after evidence from `prove`, the criteria, and the merge danger.
 7. Run `/review-loop` for code or executable-workflow changes.
-8. If the Merging rules in `AGENTS.md` allow it, merge (squash, pinned to the
-   reviewed head commit), confirm a `Closes` issue closed, and remove the
-   worktree. A `human-verified` issue stays open (the PR and the squash commit
-   message say `Refs`, never `Closes`): label it
-   `needs-review` and comment what the user must try and how. Otherwise stop.
-   Either way, end with the PR URL and the real review result.
+8. **Apply the merge policy** (`AGENTS.md`). Check the PR is safe: review
+   passed with no open bug findings, two-way door, issue not `human-verified`,
+   no path from `.github/CODEOWNERS` in `gh pr diff <n> --name-only`, and
+   Auto-merge is `on`.
+   - Safe: `gh pr merge <n> --auto --squash`. GitHub merges it when the
+     ruleset's checks pass.
+   - Not safe: label the issue `parked` and comment on the PR with the reason.
+9. Present the PR URL, the review result, and whether auto-merge is on or why
+   it was parked.
 
 ## Never
 
-- Merge outside the `AGENTS.md` Merging rules, or use any override.
+- Merge by hand (`gh pr merge` without `--auto`), or turn on auto-merge for a
+  PR the policy parks, unless the user explicitly asks.
 - Push to `main` or use plain `--force`.
 - Report a review pass that didn't happen.

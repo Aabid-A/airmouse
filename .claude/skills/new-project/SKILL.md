@@ -25,29 +25,34 @@ Start a project the factory can run on.
    (use `--public` only if the user asked).
 2. **Install the factory:** `<factory>/install.sh repo <project> --target <t>`
    for the user's harness (`claude`, `agents`, `cursor`, `all`). It adds
-   `AGENTS.md`, skills, `.github/` templates and CI,
+   `AGENTS.md`, skills, `design-references/`, `.github/` templates and CI,
    `CODING_STANDARDS.md`, `scripts/check.sh` and the git hooks.
 3. **Write a short `README.md`** (one-line description, stack, how to run) and
    a `.gitignore` for the stack. This first scaffold is the only commit on
-   `main`; the hooks block it. Agents never use overrides, so stop and give the
-   user these one-off commands to run themselves:
+   `main`; the hooks block it, so use the one-off override and tell the user:
    `ALLOW_MAIN=1 git commit ...` and `ALLOW_MAIN=1 SKIP_CHECKS=1 git push`.
    Every later change goes through a branch and PR.
-4. **Create labels:** `spec`, `ready`, `in-progress`, `needs-review`, `blocked`,
-   `human-verified` (`gh label create`; ignore "already exists").
+4. **Server-side brakes**, after the scaffold is on `main`:
+   `<factory>/github/setup.sh <owner>/<name>`. It turns on squash and
+   auto-merge, creates the labels, and adds the ruleset that blocks direct
+   pushes to `main` and requires a PR with passing `checks`. If the ruleset
+   fails (private repos on a free plan can't use rulesets), tell the user and
+   record "GitHub ruleset: not available" in `AGENTS.md` Conventions; the local
+   hooks remain the only brake. Without `gh`, create the labels with the GitHub
+   MCP tools and ask the user to add the ruleset in Settings > Rules.
+   Fill in `.github/CODEOWNERS` with the user's one-way-door paths.
 5. **Open the setup issues** with the `to-issues` skill, after the user confirms
    the list. Defaults, in order:
    - Fill in `scripts/check.sh` (install, lint, typecheck, test) and remove its
      guard; add the runtime to `.github/workflows/checks.yml`. Until this
-     lands the pre-push hook blocks pushes and CI fails: make this the first
-     issue, and let the user push with `SKIP_CHECKS=1` if they choose.
+     lands, push with `SKIP_CHECKS=1` and expect CI to fail.
    - Choose the stack, record it as the first ADR, and write `skills/code-structure`.
    - Start `GLOSSARY.md` with the core domain terms (`domain-docs`).
    - Once the app runs: `create-verification-skill` to script launching and
      driving it.
    - First project rules in `CODING_STANDARDS.md`.
-   - If there is a UI: choose the visual style and main references (record
-     both in `AGENTS.md` Conventions or the README), then build design tokens and base styles.
+   - If there is a UI: choose the `STYLE.md` mode and main references (record
+     both in `AGENTS.md` Conventions), then build design tokens and base styles.
    - First vertical slice of the product (better: `grill`, then `to-spec`).
 6. **Push and report:** the repo URL, the issue list, and which issue to take
    first with `pick-issue`.
