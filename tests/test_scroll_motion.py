@@ -324,7 +324,9 @@ def test_the_scroll_line_has_every_number_needed_for_tuning() -> None:
 
     line = scroll_line(rig.controller.scroll_reading)
 
-    assert line.startswith("scroll: scrolling two=1.00 entry=0.50 exit=0.30 offset=+0.35")
+    assert line.startswith(
+        "scroll: continuous scrolling two=1.00 entry=0.50 exit=0.30 offset=+0.35"
+    )
     assert "deadzone=0.15" in line
     assert "speed=+500px/s" in line
     assert "flick=+0.00/3.0" in line
@@ -337,7 +339,7 @@ def test_the_scroll_line_after_no_hand_says_blocked_and_has_no_numbers() -> None
     line = scroll_line(rig.controller.scroll_reading)
 
     assert line == (
-        "scroll: blocked two=-- entry=0.50 exit=0.30 offset=-- deadzone=0.15 "
+        "scroll: continuous blocked two=-- entry=0.50 exit=0.30 offset=-- deadzone=0.15 "
         "speed=+0px/s flick=--/3.0"
     )
 

@@ -232,7 +232,7 @@ class ScrollConfig:
     finger_curled: float = _bounded(1.0, low=0.0, high=3.0)
     finger_open: float = _bounded(1.4, low=0.0, high=3.0)
     pair_gap: float = _bounded(0.3, low=0.0, high=2.0)
-    separation: float = _bounded(0.5, low=0.01, high=3.0)
+    separation: float = _bounded(0.7, low=0.01, high=3.0)
     flick_speed: float = _bounded(3.0, low=0.1, high=50.0)
     flick_min_travel: float = _bounded(0.3, low=0.01, high=3.0)
     flick_window_ms: float = _bounded(150.0, low=10.0, high=1000.0)

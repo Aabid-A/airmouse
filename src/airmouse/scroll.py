@@ -4,7 +4,9 @@ The Controller decides when scrolling is allowed at all (active, no Pinch, no Fi
 no Open palm) and feeds every frame here. `Scroll` owns the rest:
 
 - Entry: the two-finger score reaches `score_threshold` for `debounce_ms`. The anchor
-  is then the midpoint of the index and middle fingertips.
+  is then the midpoint of the index and middle knuckles (`scroll_point`), and offsets
+  are measured in the hand size at that moment, so a Hand that tilts and looks shorter
+  does not inflate them.
 - Staying: the score only has to stay at `exit_threshold` or more (hysteresis). A
   lower score starts a grace period of `grace_ms`: the offset is no longer read (the
   landmarks are not trusted) and the speed fades from its last value to zero. If the
@@ -52,6 +54,7 @@ class ScrollReading:
     """The latest frame's two-finger score and scroll state, for the debug readout."""
 
     state: ScrollState
+    mode: str  # "auto", "continuous" or "flick"
     score: float | None  # two-finger score, None with no Hand
     threshold: float  # entry
     exit_threshold: float  # staying
@@ -104,6 +107,7 @@ class Scroll:
         self._since: float | None = None  # start of the pose run before scrolling
         self._blocked = False
         self._anchor: Point | None = None  # None when not scrolling
+        self._scale = 1.0  # the hand size when the scroll started
         self._offset: float | None = None  # smoothed, hand sizes above the anchor
         self._speed = 0.0
         self._carry = 0.0  # the fraction of a pixel not yet scrolled
@@ -129,6 +133,7 @@ class Scroll:
         threshold = config.exit_threshold if active else config.score_threshold
         return ScrollReading(
             state=self._state(),
+            mode=config.mode,
             score=score,
             threshold=config.score_threshold,
             exit_threshold=config.exit_threshold,
@@ -216,6 +221,7 @@ class Scroll:
 
     def _start(self, landmarks: Landmarks) -> None:
         self._anchor = scroll_point(landmarks)
+        self._scale = hand_size(landmarks)
         self._last = self._now
         self._carry = 0.0
         self._filter.reset()
@@ -231,7 +237,7 @@ class Scroll:
         config, now, anchor = self._config, self._now, self._anchor
         if anchor is None:
             return
-        raw = (anchor[1] - scroll_point(landmarks)[1]) / hand_size(landmarks)  # image y is down
+        raw = (anchor[1] - scroll_point(landmarks)[1]) / self._scale  # image y is down
         offset = self._filter(now, raw)
         self._offset = offset
         travel = self._remember(raw)

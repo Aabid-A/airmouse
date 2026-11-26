@@ -110,6 +110,7 @@ def scroll_reading(
     scrolling = offset is not None
     return ScrollReading(
         state=state or (ScrollState.SCROLLING if scrolling else ScrollState.IDLE),
+        mode="auto",
         score=score,
         threshold=0.5,
         exit_threshold=0.3,

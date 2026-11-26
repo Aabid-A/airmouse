@@ -59,6 +59,8 @@ NOT_TWO_FINGER_POSES = [
     "pinch others open",
 ]
 VIEWS = [(pitch, roll) for pitch in (-20.0, 0.0, 20.0) for roll in (-20.0, 0.0, 20.0)]
+ROLLS = (-30.0, -20.0, 0.0, 20.0, 30.0)
+SEEDS = 6
 PITCH_SWEEP = [float(pitch) for pitch in range(-30, 80, 5)]
 TOWARDS_CAMERA = [40.0, 45.0, 50.0, 55.0, 60.0, 65.0, 70.0, 75.0]
 
@@ -174,13 +176,43 @@ def test_a_relaxed_two_finger_pose_counts(name: str, pitch: float, roll: float) 
 @pytest.mark.parametrize("name", NOT_TWO_FINGER_POSES)
 @pytest.mark.parametrize("pitch", PITCH_SWEEP)
 def test_no_other_hand_shape_comes_near_the_thresholds_at_any_tilt(name: str, pitch: float) -> None:
-    for roll in (-20.0, 0.0, 20.0):
-        for seed in range(3):
+    for roll in ROLLS:
+        for seed in range(SEEDS):
             hand = synthetic_hand(name, pitch=pitch, roll=roll, jitter=0.004, seed=seed)
+            score = two_finger_score(hand)
 
-            # Below the exit threshold with a margin, so none of them can start a scroll
-            # or keep one going.
-            assert two_finger_score(hand) <= DEFAULT.exit_threshold - MARGIN
+            # Up to 65 degrees: below the exit threshold with a margin. Steeper, the Hand is
+            # so foreshortened that the jitter is a large part of it, and a single frame of
+            # an open palm (together or thumb tucked) can reach about 0.3 at 70 to 75
+            # degrees: still below the exit threshold, and far from the entry one.
+            if pitch <= 65:
+                assert score <= DEFAULT.exit_threshold - MARGIN
+            else:
+                assert score < DEFAULT.exit_threshold
+
+
+@pytest.mark.parametrize("name", NOT_TWO_FINGER_POSES)
+def test_no_other_hand_shape_ever_starts_a_scroll_at_any_tilt(name: str) -> None:
+    rig = Rig(scroll=DEFAULT)
+    for pitch in PITCH_SWEEP:
+        for roll in ROLLS:
+            rig.feed(0.2, pointer())  # leave whatever came before
+            for frame in range(12):  # 0.4 s, a new jitter every frame
+                rig.frame(
+                    synthetic_hand(
+                        name,
+                        size=SIZE,
+                        centre=(0.5, WRIST_Y),
+                        pitch=pitch,
+                        roll=roll,
+                        jitter=0.004,
+                        seed=frame,
+                    )
+                )
+                assert not rig.controller.scrolling
+            if rig.controller.state is State.PAUSED:
+                rig.feed(1.0, open_hand())  # an open palm paused it: unpause and go on
+    assert "scroll" not in rig.kinds()
 
 
 @pytest.mark.parametrize("pitch", TOWARDS_CAMERA)
@@ -244,10 +276,11 @@ def test_an_unmeasurable_hand_scores_0_and_the_pose_thresholds_come_from_config(
 
 
 def between_the_thresholds() -> Landmarks:
-    """A Hand partway from two fingers to the Pointer pose, whose score lies between the
+    """A Hand partway from two fingers to the half-open hand, whose score lies between the
     exit and the entry thresholds."""
-    for step in range(101):
-        hand = seen_hand(blend(POSES["two fingers"], POSES["pointing"], step / 100), size=SIZE)
+    for step in range(401):
+        target = POSES["half-open fingers"]
+        hand = seen_hand(blend(POSES["two fingers"], target, step / 400), size=SIZE)
         score = two_finger_score(hand)
         if DEFAULT.exit_threshold + 0.05 < score < DEFAULT.score_threshold - 0.05:
             return [(x, y - (0.75 - WRIST_Y)) for x, y in hand]
@@ -582,6 +615,62 @@ def test_an_open_palm_stops_the_scroll_at_once_and_pauses() -> None:
     assert "scroll" not in rig.kinds()
 
 
+# The scroll can never get in the way of pausing: a real Open palm, steeply tilted,
+# where single frames can read as two fingers.
+OPEN_PALMS = ["open together", "open thumb tucked", "open fanned"]
+STEEP = [60.0, 65.0, 70.0, 75.0]
+NO_SCROLL = dataclasses.replace(DEFAULT, separation=3.0)  # the two-finger score is always 0
+PAUSE_RUNS = [
+    (name, pitch, roll, seed)
+    for name in OPEN_PALMS
+    for pitch in STEEP
+    for roll in (-30.0, 0.0, 30.0)
+    for seed in range(4)
+]
+
+
+def frames_to_pause(rig: Rig, name: str, pitch: float, roll: float, seed: int) -> int | None:
+    """Show a jittery Open palm for up to 3 s; the frame it paused on, or None."""
+    for frame in range(90):
+        rig.frame(
+            synthetic_hand(
+                name,
+                size=SIZE,
+                centre=(0.5, WRIST_Y),
+                pitch=pitch,
+                roll=roll,
+                jitter=0.004,
+                seed=1000 * seed + frame,
+            )
+        )
+        if rig.controller.state is State.PAUSED:
+            return frame
+    return None
+
+
+def test_a_tilted_open_palm_pauses_on_exactly_the_same_frame_as_without_the_scroll() -> None:
+    for run in PAUSE_RUNS:
+        with_scroll = Rig(scroll=DEFAULT)
+        without = Rig(scroll=NO_SCROLL)
+
+        assert frames_to_pause(with_scroll, *run) == frames_to_pause(without, *run), run
+
+
+def test_a_tilted_open_palm_pauses_after_a_scroll_as_often_as_without_the_scroll() -> None:
+    after_scroll = 0
+    reference = 0
+    for run in PAUSE_RUNS:
+        rig = Rig(scroll=DEFAULT)
+        rig.start_scroll()
+        rig.feed(0.3, two(up=0.5))
+        after_scroll += frames_to_pause(rig, *run) is not None
+        plain = Rig(scroll=NO_SCROLL)
+        plain.feed(0.5, two(up=0.5))  # the same Hand, but it cannot scroll
+        reference += frames_to_pause(plain, *run) is not None
+
+    assert after_scroll >= reference
+
+
 def test_nothing_happens_while_paused() -> None:
     rig = Rig(scroll=DEFAULT, active=False)
 
@@ -595,21 +684,55 @@ def test_nothing_happens_while_paused() -> None:
     assert not rig.controller.scrolling
 
 
-def test_a_fist_ends_the_scroll_within_the_grace_period_and_at_once_with_the_clutch() -> None:
+def test_a_fist_ends_the_scroll_through_the_clutch_or_within_the_grace_period() -> None:
     rig = Rig()
     rig.start_scroll()
     rig.feed(0.3, two(up=0.5))
     rig.output.events.clear()
+    relative = rig.controller.fist_reading is not None
 
     rig.frame(pose("fist", up=0.5))
-    if rig.controller.fist_reading is not None:  # relative mode: the Fist counts at once
-        assert not rig.controller.scrolling
-    rig.feed(DEFAULT.grace_ms / 1000 + FRAME_S, pose("fist", up=0.5))
+    assert rig.controller.scrolling  # one frame of a Fist is not enough
+    clutch_s = base_config().clutch.debounce_ms / 1000
+    rig.feed((clutch_s if relative else DEFAULT.grace_ms / 1000) + FRAME_S, pose("fist", up=0.5))
     assert not rig.controller.scrolling
+    assert rig.controller.clutch == relative
     rig.output.events.clear()
     rig.feed(0.5, pose("fist", up=0.5))
 
     assert "scroll" not in rig.kinds()
+
+
+def test_one_frame_read_as_a_fist_does_not_cut_a_scroll() -> None:
+    rig = Rig()
+    rig.start_scroll()
+    rig.settle(two(up=0.5))
+
+    rig.frame(pose("fist", up=0.5))
+    rig.feed(0.3, two(up=0.5))
+
+    assert rig.controller.scrolling
+    assert not rig.controller.clutch
+    assert all(pixels > 0 for pixels in (e[1] for e in rig.output.events if e[0] == "scroll"))
+
+
+def frames_to_clutch(rig: Rig) -> int:
+    frames = 0
+    while not rig.controller.clutch and frames < 30:
+        rig.frame(pose("fist"))
+        frames += 1
+    return frames
+
+
+def test_a_fist_while_not_scrolling_clutches_as_fast_as_ever() -> None:
+    after_scroll = Rig()
+    after_scroll.start_scroll()
+    after_scroll.feed(0.3, two(up=0.5))
+    after_scroll.feed(0.5, pointer())  # the scroll is over
+    never_scrolled = Rig()
+    never_scrolled.feed(1.0, pointer())  # the same time on the clock
+
+    assert frames_to_clutch(after_scroll) == frames_to_clutch(never_scrolled)
 
 
 def test_a_short_dropout_keeps_the_scroll_without_a_burst() -> None:
@@ -812,7 +935,7 @@ EXPECTED_DEFAULTS: dict[str, Any] = {
     "finger_curled": 1.0,
     "finger_open": 1.4,
     "pair_gap": 0.3,
-    "separation": 0.5,
+    "separation": 0.7,
     "flick_speed": 3.0,
     "flick_min_travel": 0.3,
     "flick_window_ms": 150.0,

@@ -223,9 +223,10 @@ def two_finger_score(landmarks: Landmarks, config: ScrollConfig = DEFAULT_SCROLL
 
 
 def scroll_point(landmarks: Landmarks) -> Point:
-    """The midpoint of the index and middle fingertips: the point the Scroll follows. Where
-    it is when scrolling starts is the anchor."""
-    (ix, iy), (mx, my) = landmarks[INDEX_TIP], landmarks[MIDDLE_TIP]
+    """The midpoint of the index and middle fingers' base (MCP) joints, the knuckles: the
+    point the Scroll follows. Where it is when scrolling starts is the anchor. The knuckles,
+    not the fingertips, so tilting the two fingers towards the camera moves it less."""
+    (ix, iy), (mx, my) = landmarks[INDEX_MCP], landmarks[MIDDLE_MCP]
     return ((ix + mx) / 2, (iy + my) / 2)
 
 

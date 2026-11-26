@@ -90,7 +90,7 @@ def scroll_line(reading: ScrollReading) -> str:
 
     score = "--" if reading.score is None else f"{reading.score:.2f}"
     return (
-        f"scroll: {reading.state.value} two={score} "
+        f"scroll: {reading.mode} {reading.state.value} two={score} "
         f"entry={reading.threshold:.2f} exit={reading.exit_threshold:.2f} "
         f"offset={number(reading.offset)} deadzone={reading.deadzone:.2f} "
         f"speed={reading.speed:+.0f}px/s flick={number(reading.flick)}/"
