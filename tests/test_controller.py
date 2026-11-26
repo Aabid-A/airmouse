@@ -43,6 +43,9 @@ class FakeOutput:
     def release_drag(self) -> None:
         self.commands.append("release_drag")
 
+    def scroll(self, pixels: int) -> None:
+        self.commands.append("scroll")
+
 
 def hand(*, palm: bool, dx: float = 0.0) -> Landmarks:
     """A synthetic Hand, hand size 0.2, shifted sideways by `dx`."""

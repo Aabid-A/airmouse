@@ -102,6 +102,18 @@ POSES: dict[str, Pose] = {
         (-10.0, 5.0, 20.0),
         thumb_lift=25.0,
     ),
+    "two fingers": Pose(
+        CLOSED,
+        {**FIST, "index": (4, 6, 4), "middle": (4, 6, 4)},
+        (20.0, 45.0, 70.0),
+        thumb_lift=45.0,
+    ),
+    "two fingers relaxed": Pose(
+        TOGETHER,
+        {"index": RELAXED, "middle": RELAXED, "ring": LOOSE_CURL, "pinky": LOOSE_CURL},
+        (-10.0, 5.0, 20.0),
+        thumb_lift=25.0,
+    ),
     "pinch fingers curled": Pose(
         CLOSED,
         {**FIST, "index": (35, 45, 25)},

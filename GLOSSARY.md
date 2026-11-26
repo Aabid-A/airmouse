@@ -34,7 +34,7 @@ All four fingers curled into the palm, the index included: each fingertip folded
 _Avoid_: Grab
 
 **Gesture**:
-A recognised hand shape. v1: **pinch**, **open palm** and **fist**. Later: scroll, right-click.
+A recognised hand shape. v1: **pinch**, **open palm**, **fist** and **scroll**. Later: right-click.
 _Avoid_: Pose, sign
 
 **Pinch**:
@@ -44,6 +44,10 @@ _Avoid_: Tap, grab
 **Open palm**:
 The four fingers held upright and extended, together or spread, scored from 0 to 1 against a threshold (`[open_palm]` in the config). The thumb and the spread only add a little, so a normal open hand counts; a fist, a Pointer pose and a Pinch never do. Pauses at once; held steady for about 0.8 s (configurable) it also unpauses, so it acts as a toggle.
 _Avoid_: Stop sign, high five
+
+**Scroll**:
+The Gesture of holding the index and middle fingers up together and moving the Hand up or down from where it started. Rate-based: past a deadzone, the further from the start (the anchor), the faster the page moves, up to a cap (`[scroll]`). Hand up scrolls up unless `invert` is set. While scrolling the cursor holds still and no button is pressed. Works in both control modes. The Preview says SCROLL.
+_Avoid_: swipe, pan
 
 **Hold ring**:
 The progress ring in the Preview that fills while an open palm is held toward unpausing, so it never triggers by accident.

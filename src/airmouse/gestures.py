@@ -7,7 +7,7 @@ the fingertips and 5/9/13/17 the finger base (MCP) joints.
 import math
 from collections.abc import Sequence
 
-from airmouse.config import ClutchConfig, OpenPalmConfig, PinchConfig
+from airmouse.config import ClutchConfig, OpenPalmConfig, PinchConfig, ScrollConfig
 
 type Point = tuple[float, float]
 type Landmarks = Sequence[Point]
@@ -19,7 +19,10 @@ POINTER = 8  # the index fingertip; its position drives the cursor
 INDEX_MCP = 5
 INDEX_TIP = 8
 MIDDLE_MCP = 9
-FINGER_TIPS = (8, 12, 16, 20)
+MIDDLE_TIP = 12
+RING_TIP = 16
+PINKY_TIP = 20
+FINGER_TIPS = (INDEX_TIP, MIDDLE_TIP, RING_TIP, PINKY_TIP)
 FINGER_BASES = (5, 9, 13, 17)  # the MCP joint of each finger in FINGER_TIPS
 
 # All distances are in hand sizes (wrist to the middle finger's base), so the
@@ -29,6 +32,7 @@ FINGER_SPREAD = 0.25  # neighbouring fingertips this far apart are fully spread
 
 DEFAULT_OPEN_PALM = OpenPalmConfig()
 DEFAULT_CLUTCH = ClutchConfig()
+DEFAULT_SCROLL = ScrollConfig()
 
 
 def distance(a: Point, b: Point) -> float:
@@ -95,9 +99,8 @@ def open_palm_score(landmarks: Landmarks, config: OpenPalmConfig = DEFAULT_OPEN_
         return 0.0
     if distance(landmarks[THUMB_TIP], landmarks[INDEX_TIP]) < config.pinch_gap * size:
         return 0.0
-    wrist = landmarks[WRIST]
     reach = [
-        _ramp(distance(wrist, landmarks[tip]) / size, config.finger_curled, config.finger_extended)
+        _ramp(_tip_reach(landmarks, tip, size), config.finger_curled, config.finger_extended)
         for tip in FINGER_TIPS
     ]
     thumb = _ramp(distance(landmarks[THUMB_TIP], landmarks[INDEX_MCP]) / size, 0.0, THUMB_OUT)
@@ -110,6 +113,41 @@ def open_palm_score(landmarks: Landmarks, config: OpenPalmConfig = DEFAULT_OPEN_
         + config.thumb_weight * thumb
         + config.spread_weight * spread
     )
+
+
+def _tip_reach(landmarks: Landmarks, tip: int, size: float) -> float:
+    """How far the `tip` landmark is from the wrist, in hand sizes: the finger-extension
+    measure the Open palm and the two-finger pose share."""
+    return distance(landmarks[WRIST], landmarks[tip]) / size
+
+
+def two_finger_score(landmarks: Landmarks, config: ScrollConfig = DEFAULT_SCROLL) -> float:
+    """How much the Hand looks like the Scroll pose, from 0 to 1: index and middle
+    raised together, ring and pinky curled, the thumb free.
+
+    Each finger is scored with the Open palm's finger-extension measure (wrist to tip,
+    in hand sizes): a raised finger earns 1 at `config.finger_extended` or more and 0 at
+    `config.finger_curled` or less, and a curled finger the other way round. The score
+    is the weakest of the four, so the Pointer pose (middle curled), an Open palm (ring
+    and pinky out) and a Fist (index and middle curled) all score near 0.
+    """
+    if len(landmarks) != LANDMARK_COUNT:
+        return 0.0
+    size = hand_size(landmarks)
+    if size <= 0:
+        return 0.0
+
+    def raised(tip: int) -> float:
+        return _ramp(_tip_reach(landmarks, tip, size), config.finger_curled, config.finger_extended)
+
+    return min(raised(INDEX_TIP), raised(MIDDLE_TIP), 1 - raised(RING_TIP), 1 - raised(PINKY_TIP))
+
+
+def scroll_point(landmarks: Landmarks) -> Point:
+    """The midpoint of the index and middle fingertips: the point the Scroll follows. Where
+    it is when scrolling starts is the anchor."""
+    (ix, iy), (mx, my) = landmarks[INDEX_TIP], landmarks[MIDDLE_TIP]
+    return ((ix + mx) / 2, (iy + my) / 2)
 
 
 def is_open_palm(landmarks: Landmarks, config: OpenPalmConfig = DEFAULT_OPEN_PALM) -> bool:

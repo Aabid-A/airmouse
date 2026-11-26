@@ -180,6 +180,34 @@ class OpenPalmConfig:
 
 
 @dataclass(frozen=True)
+class ScrollConfig:
+    """The Scroll: index and middle raised together, ring and pinky curled, then the Hand
+    moved up or down from where the pose started (the anchor). Works in both control modes.
+
+    Pose: each finger is scored by how far its tip is from the wrist, in hand sizes. A
+    raised finger (index, middle) earns 0 at `finger_curled` or less and 1 at
+    `finger_extended` or more; a curled finger (ring, pinky) the other way round. The
+    two-finger score is the weakest of the four and counts at `score_threshold` or more,
+    held for `debounce_ms` before scrolling starts. The defaults are loose, so a relaxed
+    two-finger pose counts; `--debug-gestures` shows the score for tuning.
+
+    Motion: rate-based. A vertical offset from the anchor of `deadzone` hand sizes or
+    less does nothing; past it the speed is `gain` pixels per second for each hand size
+    beyond the deadzone, capped at `max_speed` pixels per second. The Hand up scrolls up
+    (content above comes into view); `invert = true` flips that.
+    """
+
+    deadzone: float = _bounded(0.15, low=0.0, high=2.0)
+    gain: float = _bounded(2500.0, low=1.0, high=50000.0)
+    max_speed: float = _bounded(1500.0, low=1.0, high=20000.0)
+    invert: bool = False
+    score_threshold: float = _bounded(0.5, low=0.01, high=1.0)  # above 0: a score of 0 never counts
+    finger_curled: float = _bounded(1.0, low=0.0, high=3.0)
+    finger_extended: float = _bounded(1.4, low=0.0, high=3.0)
+    debounce_ms: float = _bounded(120.0, low=0.0, high=2000.0)
+
+
+@dataclass(frozen=True)
 class Config:
     camera: CameraConfig = CameraConfig()
     active_region: ActiveRegionConfig = ActiveRegionConfig()
@@ -190,6 +218,7 @@ class Config:
     open_palm: OpenPalmConfig = OpenPalmConfig()
     relative: RelativeConfig = RelativeConfig()
     clutch: ClutchConfig = ClutchConfig()
+    scroll: ScrollConfig = ScrollConfig()
 
 
 def _check_value(key: str, spec: dataclasses.Field[Any], value: Any) -> Any:
@@ -261,6 +290,8 @@ def _build(raw: Mapping[str, Any]) -> Config:
         raise ConfigError("clutch.tip_curled: must be below clutch.tip_open")
     if clutch.hold_threshold > clutch.score_threshold:
         raise ConfigError("clutch.hold_threshold: must be at most clutch.score_threshold")
+    if config.scroll.finger_curled >= config.scroll.finger_extended:
+        raise ConfigError("scroll.finger_curled: must be below scroll.finger_extended")
     return config
 
 

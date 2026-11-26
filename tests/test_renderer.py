@@ -5,7 +5,7 @@ import numpy as np
 import pytest
 
 from airmouse.config import CameraConfig, Config
-from airmouse.controller import FistReading, PalmReading, Phase, State
+from airmouse.controller import FistReading, PalmReading, Phase, ScrollReading, State
 from airmouse.frame import active_region, prepare_point, prepared_frame_size
 from airmouse.gestures import Point, is_open_palm
 from airmouse.mapping import AbsoluteMapping, mapped_region
@@ -19,6 +19,7 @@ from airmouse.renderer import (
     DEBUG_LEFT,
     DEBUG_LINE,
     DEBUG_ROW,
+    DEBUG_SCROLL_TOP,
     DEBUG_TOP,
     DEFAULT_VIEW,
     HEIGHT,
@@ -96,6 +97,21 @@ def reading(score: float | None, speed: float | None, *, counts: bool, steady: b
     )
 
 
+def scroll_reading(
+    score: float | None, *, offset: float | None = None, speed: float = 0.0
+) -> ScrollReading:
+    return ScrollReading(
+        score=score,
+        threshold=0.5,
+        counts=score is not None and score >= 0.5,
+        scrolling=offset is not None,
+        offset=offset,
+        deadzone=0.15,
+        speed=speed,
+        max_speed=1500.0,
+    )
+
+
 def debug_cases() -> dict[str, Image]:
     """The `--debug-gestures` readout in three situations, from made-up numbers."""
     return {
@@ -135,6 +151,20 @@ def debug_cases() -> dict[str, Image]:
                 ),
             ),
         ),
+        "debug_scroll": render_preview(
+            State.ACTIVE,
+            landmarks=TWO_FINGERS,
+            camera_on=True,
+            fps=29.9,
+            view=RELATIVE_VIEW,
+            scrolling=True,
+            debug=DebugReadout(
+                reading(0.0, 0.3, counts=False, steady=True),
+                TIMINGS,
+                FistReading(0.0, 0.6, counts=False, clutch=False, curl=0.0, hold_threshold=0.3),
+                scroll_reading(0.92, offset=0.35, speed=500.0),
+            ),
+        ),
         "debug_no_hand": render_preview(
             State.PAUSED,
             camera_on=True,
@@ -147,6 +177,7 @@ def debug_cases() -> dict[str, Image]:
 PINCHED = placed(pinched(pointing_hand(), 0.05), dy=-0.08)
 FIST = synthetic_hand("fist", centre=(0.5, 0.68))
 HALF_CLOSED = placed(closing_fist(0.6), dy=-0.07)
+TWO_FINGERS = synthetic_hand("two fingers", centre=(0.5, 0.68))
 RELATIVE_VIEW = FrameView(outline=False)  # relative mode: no Active region outline
 
 
@@ -189,6 +220,14 @@ def state_cases() -> dict[str, Image]:
             fps=30.0,
             view=RELATIVE_VIEW,
             holding=True,
+        ),
+        "scroll": render_preview(
+            State.ACTIVE,
+            landmarks=TWO_FINGERS,
+            camera_on=True,
+            fps=30.0,
+            view=RELATIVE_VIEW,
+            scrolling=True,
         ),
         "no_hand": render_preview(State.PAUSED, camera_on=True, fps=30.0),
         "no_hand_active": render_preview(State.ACTIVE, camera_on=True, fps=30.0, no_hand=True),
@@ -796,3 +835,63 @@ def test_the_curl_bar_shows_the_finger_curl_against_the_hold_threshold() -> None
     assert filled_width(low, bar_top, TEXT_ACTIVE) == DEBUG_BAR_WIDTH // 4
     assert filled_width(high, bar_top, TEXT_PAUSED) == DEBUG_BAR_WIDTH - 1
     assert low.get(BAR_LEFT + round(0.3 * DEBUG_BAR_WIDTH), bar_top + 2) == JOINT
+
+
+def scroll_debug(reading_: ScrollReading) -> DebugReadout:
+    return DebugReadout(reading(0.1, 0.0, counts=False, steady=True), (), None, reading_)
+
+
+def test_the_two_finger_bar_shows_the_score_against_its_threshold() -> None:
+    bar_top = DEBUG_SCROLL_TOP + DEBUG_BAR_OFFSET
+    low = render_preview(State.ACTIVE, debug=scroll_debug(scroll_reading(0.25)))
+    high = render_preview(State.ACTIVE, debug=scroll_debug(scroll_reading(1.0)))
+
+    assert filled_width(low, bar_top, TEXT_PAUSED) == DEBUG_BAR_WIDTH // 4
+    assert filled_width(high, bar_top, TEXT_ACTIVE) == DEBUG_BAR_WIDTH - 1
+    assert low.get(BAR_LEFT + round(0.5 * DEBUG_BAR_WIDTH), bar_top + 2) == JOINT
+
+
+def test_the_offset_and_rate_bars_fill_only_while_scrolling() -> None:
+    offset_top = DEBUG_SCROLL_TOP + DEBUG_ROW + DEBUG_BAR_OFFSET
+    rate_top = DEBUG_SCROLL_TOP + 2 * DEBUG_ROW + DEBUG_BAR_OFFSET
+    idle = render_preview(State.ACTIVE, debug=scroll_debug(scroll_reading(0.9)))
+    moving = render_preview(
+        State.ACTIVE, debug=scroll_debug(scroll_reading(0.9, offset=-0.5, speed=-750.0))
+    )
+
+    for top in (offset_top, rate_top):
+        assert filled_width(idle, top, TEXT_ACTIVE) == 0
+        assert filled_width(idle, top, TEXT_PAUSED) == 0
+    assert filled_width(moving, offset_top, TEXT_ACTIVE) == DEBUG_BAR_WIDTH // 2 - 1  # the tick
+    assert filled_width(moving, rate_top, TEXT_ACTIVE) == DEBUG_BAR_WIDTH // 2
+
+
+def test_the_scroll_readout_sits_below_the_fist_and_leaves_everything_above() -> None:
+    plain = render_preview(
+        State.ACTIVE, debug=DebugReadout(reading(0.1, 0.0, counts=False, steady=True))
+    )
+    with_scroll = render_preview(State.ACTIVE, debug=scroll_debug(scroll_reading(None)))
+
+    assert DEBUG_SCROLL_TOP >= DEBUG_FIST_TOP + 2 * DEBUG_ROW
+    assert with_scroll.pixels != plain.pixels
+    top = DEBUG_SCROLL_TOP * WIDTH * 3
+    assert with_scroll.pixels[:top] == plain.pixels[:top]
+
+
+def test_scrolling_says_so_and_only_the_label_differs_from_active() -> None:
+    active = render_preview(State.ACTIVE, landmarks=TWO_FINGERS, camera_on=True)
+    scroll = render_preview(State.ACTIVE, landmarks=TWO_FINGERS, camera_on=True, scrolling=True)
+
+    assert scroll.pixels != active.pixels
+    top = LABEL_TOP * WIDTH * 3
+    assert scroll.pixels[:top] == active.pixels[:top]
+
+
+def test_paused_and_no_hand_outrank_the_scroll_label() -> None:
+    paused = render_preview(State.PAUSED, 0.3, landmarks=TWO_FINGERS)
+    lost = render_preview(State.ACTIVE, no_hand=True)
+
+    assert render_preview(State.PAUSED, 0.3, landmarks=TWO_FINGERS, scrolling=True).pixels == (
+        paused.pixels
+    )
+    assert render_preview(State.ACTIVE, no_hand=True, scrolling=True).pixels == lost.pixels

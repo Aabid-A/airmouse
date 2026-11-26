@@ -73,6 +73,9 @@ class NoOutput:
     def release_drag(self) -> None:
         pass
 
+    def scroll(self, pixels: int) -> None:
+        pass
+
 
 def camera_on_line(camera: CameraConfig) -> str:
     return (
@@ -147,7 +150,7 @@ class PreviewLoop:
                 show_camera_image=self._show_camera_image,
             )
         debug = (
-            DebugReadout(status.reading, self._readout_rows(snapshot), status.fist)
+            DebugReadout(status.reading, self._readout_rows(snapshot), status.fist, status.scroll)
             if self._debug_gestures
             else None
         )
@@ -165,6 +168,7 @@ class PreviewLoop:
             view=snapshot.view,
             clutch=status.clutch,
             holding=status.holding,
+            scrolling=status.scroll is not None and status.scroll.scrolling,
         )
 
     def _readout_rows(self, snapshot: Snapshot) -> tuple[tuple[str, float], ...]:
@@ -220,6 +224,7 @@ def run_preview(
             config.open_palm,
             config.pinch,
             config.clutch if relative else None,  # the clutch is relative-mode only
+            config.scroll,  # the Scroll works in both control modes
         )
     )
     slot = LatestSlot[Snapshot]()

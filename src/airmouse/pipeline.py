@@ -30,7 +30,15 @@ from typing import TextIO
 from airmouse.calibrate import region_for
 from airmouse.camera import Camera, CameraError
 from airmouse.config import Config
-from airmouse.controller import Controller, FistReading, Output, PalmReading, Phase, State
+from airmouse.controller import (
+    Controller,
+    FistReading,
+    Output,
+    PalmReading,
+    Phase,
+    ScrollReading,
+    State,
+)
 from airmouse.displays import Display, Screen
 from airmouse.frame import Frame, Region, prepare_frame
 from airmouse.gestures import Point
@@ -119,6 +127,9 @@ class ShutdownOutput:
 
     def release_drag(self) -> None:
         self._forward(self._output.release_drag)
+
+    def scroll(self, pixels: int) -> None:
+        self._forward(lambda: self._output.scroll(pixels))
 
     def displays(self) -> tuple[Display, ...]:
         screen = self._screen
@@ -231,6 +242,7 @@ class ControllerStatus:
     clutch: bool = False
     holding: bool = False
     fist: FistReading | None = None
+    scroll: ScrollReading | None = None
 
     @classmethod
     def of(cls, controller: Controller) -> "ControllerStatus":
@@ -243,6 +255,7 @@ class ControllerStatus:
             controller.clutch,
             controller.holding,
             controller.fist_reading,
+            controller.scroll_reading,
         )
 
 
