@@ -13,9 +13,10 @@ and `reset` to start afresh. `control.mode` picks the implementation:
 
 Both smooth the Pointer with the One Euro filter. The Pointer arrives already in the
 prepared (rotated, mirrored) frame, because the tracker runs on the prepared frame,
-so rotate and mirror need no step here. Absolute positions are in display pixels,
-the unit the filter's `beta` is tuned for; relative mode filters the Pointer in the
-same scale (`RELATIVE_FILTER_SCALE`), so one `[filter]` section suits both.
+so rotate and mirror need no step here. Absolute mode filters display pixels with
+`[filter]`; relative mode filters frame heights with its own settings in `[relative]`,
+counting speed in hand sizes per second, so its smoothing too is the same near or far
+from the camera.
 """
 
 import math
@@ -34,10 +35,6 @@ from airmouse.filter import OneEuroFilter
 from airmouse.frame import Region, active_region, prepared_frame_size
 from airmouse.gestures import INDEX_MCP, MIDDLE_MCP, POINTER, WRIST, Landmarks, Point
 
-# Relative mode filters the Pointer in these units per frame height. With the default
-# camera, region and a 1440x900 display, absolute mode maps one frame height to about
-# 1800 display pixels, so `filter.beta` means the same in both modes.
-RELATIVE_FILTER_SCALE = 1800.0
 # Relative mode re-reads the display list this often (seconds), on the worker thread.
 DISPLAY_REFRESH_S = 1.0
 
@@ -113,10 +110,12 @@ class AbsolutePath:
 class RelativePath:
     """Relative control mode: the cursor moves by the filtered Pointer's movement.
 
-    A Pointer movement of one hand size moves the cursor `gain` points, more when the
-    hand moves fast (`acceleration`), never more than `max_gain`. Distances are
-    measured in frame heights (x is scaled by the prepared frame's aspect), so a
-    sideways and an upward movement of the same size move the cursor the same amount.
+    A Pointer movement of one hand size moves the cursor `gain` points when the hand
+    moves slowly, rising smoothly to `max_gain` when it moves fast (`gain()`). The
+    filter smooths hardest when the hand is slow (`min_cutoff`, plus `beta` per hand
+    size per second). Distances are measured in frame heights (x is scaled by the
+    prepared frame's aspect), so a sideways and an upward movement of the same size
+    move the cursor the same amount.
 
     The part of the Pointer's movement that only bends or straightens the index
     finger (the fingertip moving along the hand's axis relative to the finger's base)
@@ -165,8 +164,8 @@ class RelativePath:
         if self._cursor is None:
             start = self._screen.cursor_position() or self._known or self._home()
             self._cursor = clamp_to_displays(start, self._displays)
-        pointer, base = self._filtered(time_s, landmarks[POINTER], landmarks[INDEX_MCP])
         size = self._distance(landmarks[WRIST], landmarks[MIDDLE_MCP])
+        pointer, base = self._filtered(time_s, landmarks[POINTER], landmarks[INDEX_MCP], size)
         last, self._last = self._last, (time_s, pointer, base)
         if last is None or size <= 0 or time_s <= last[0]:
             return to_point(self._cursor)  # the first (or an unmeasurable) frame moves nothing
@@ -185,9 +184,14 @@ class RelativePath:
         return to_point(self._cursor)  # the cursor itself stays continuous
 
     def gain(self, speed: float) -> float:
-        """Display points per hand size at `speed` hand sizes per second, capped."""
+        """Display points per hand size at `speed` hand sizes per second.
+
+        `gain` up to `slow_speed`, `max_gain` from `fast_speed`, and a smoothstep in
+        between: it rises monotonically, with no step and no kink at either end."""
         config = self._config
-        return min(config.max_gain, config.gain * (1 + config.acceleration * speed))
+        span = (speed - config.slow_speed) / (config.fast_speed - config.slow_speed)
+        rise = min(1.0, max(0.0, span))
+        return config.gain + (config.max_gain - config.gain) * rise * rise * (3 - 2 * rise)
 
     def reset(self) -> None:
         """Forget the Pointer: the next frame starts from the real cursor position (or, if
@@ -215,13 +219,17 @@ class RelativePath:
         main = main_display(self._displays)
         return main.centre if main is not None else (0.0, 0.0)
 
-    def _filtered(self, time_s: float, pointer: Point, base: Point) -> tuple[Point, Point]:
-        """The Pointer and the index base through the One Euro filter, in frame heights."""
-        scale = RELATIVE_FILTER_SCALE
+    def _filtered(
+        self, time_s: float, pointer: Point, base: Point, size: float
+    ) -> tuple[Point, Point]:
+        """The Pointer and the index base through the One Euro filter, in frame heights.
+
+        The filter counts speed in hand sizes (`size` frame heights each), so a Hand
+        far from the camera is smoothed exactly as much as the same movement near it."""
+        unit = size if size > 0 else 1.0  # an unmeasurable frame moves nothing anyway
         values = (pointer[0] * self._aspect, pointer[1], base[0] * self._aspect, base[1])
         x, y, bx, by = (
-            each(time_s, value * scale) / scale
-            for each, value in zip(self._filters, values, strict=True)
+            each(time_s, value, unit) for each, value in zip(self._filters, values, strict=True)
         )
         return (x, y), (bx, by)
 
@@ -253,8 +261,8 @@ def make_cursor_path(
     tells relative mode where the cursor is and which displays exist.
     """
     mode = config.control.mode
-    filtering = config.filter
     if mode == "absolute":
+        filtering = config.filter
         return AbsolutePath(make_mapping(config, display), filtering.min_cutoff, filtering.beta)
     if mode == "relative":
         width, height = prepared_frame_size(
@@ -264,8 +272,8 @@ def make_cursor_path(
             config.relative,
             screen or FixedScreen(display),
             frame_aspect=width / height,
-            min_cutoff=filtering.min_cutoff,
-            beta=filtering.beta,
+            min_cutoff=config.relative.min_cutoff,
+            beta=config.relative.beta,
             fallback=FixedScreen(display).displays(),
         )
     valid = ", ".join(CONTROL_MODES)

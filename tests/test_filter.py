@@ -52,3 +52,24 @@ def test_a_zero_cutoff_holds_the_output() -> None:
     f(0.0, 3.0)
 
     assert f(0.1, 9.0) == pytest.approx(3.0)
+
+
+def test_a_speed_unit_makes_the_smoothing_the_same_at_any_scale() -> None:
+    """With speed counted in `speed_unit`s, the same motion at twice the size (and twice
+    the unit) is smoothed exactly the same, just twice as large."""
+    small, large = OneEuroFilter(0.5, 5.0), OneEuroFilter(0.5, 5.0)
+    motion = [0.0, 0.01, 0.03, 0.06, 0.10, 0.12, 0.13, 0.13, 0.13]
+
+    smoothed_small = [small(step / 30, value, 0.2) for step, value in enumerate(motion)]
+    smoothed_large = [large(step / 30, 2 * value, 0.4) for step, value in enumerate(motion)]
+
+    assert smoothed_large == pytest.approx([2 * value for value in smoothed_small])
+
+
+def test_without_a_speed_unit_beta_counts_speed_in_value_units() -> None:
+    plain, unit_one = OneEuroFilter(1.0, 0.5), OneEuroFilter(1.0, 0.5)
+    values = [0.0, 3.0, 9.0, 12.0]
+
+    assert [plain(i / 30, v) for i, v in enumerate(values)] == [
+        unit_one(i / 30, v, 1.0) for i, v in enumerate(values)
+    ]

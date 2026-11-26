@@ -26,8 +26,9 @@ def test_defaults_match_the_spec() -> None:
     assert (config.camera.index, config.camera.rotate, config.camera.mirror) == (0, 0, True)
     assert config.active_region.width_fraction == 0.6
     assert config.control.mode == "relative"
-    assert (config.relative.gain, config.relative.acceleration) == (800, 0.5)
-    assert config.relative.max_gain == 3000
+    assert (config.relative.gain, config.relative.max_gain) == (400, 2500)
+    assert (config.relative.slow_speed, config.relative.fast_speed) == (0.2, 3.0)
+    assert (config.relative.min_cutoff, config.relative.beta) == (0.5, 5.0)
     assert (config.clutch.score_threshold, config.clutch.debounce_ms) == (0.6, 100)
     assert (config.pinch.close_threshold, config.pinch.open_threshold) == (0.25, 0.40)
     assert config.pinch.click_window_ms == 300
@@ -78,8 +79,11 @@ def test_720p_is_a_config_option(tmp_path: Path) -> None:
         ("open_palm", "score_threshold", "nan"),
         ("open_palm", "steady_max_speed", "inf"),
         ("relative", "gain", "nan"),
-        ("relative", "acceleration", "inf"),
         ("relative", "max_gain", "inf"),
+        ("relative", "slow_speed", "nan"),
+        ("relative", "fast_speed", "inf"),
+        ("relative", "min_cutoff", "nan"),
+        ("relative", "beta", "inf"),
         ("clutch", "score_threshold", "nan"),
         ("clutch", "debounce_ms", "inf"),
         ("clutch", "hold_threshold", "nan"),
@@ -146,9 +150,12 @@ def test_print_config_lists_every_effective_value(
         "pinch_gap = 0.2",
         "steady_max_speed = 2.5",
         "[relative]",
-        "gain = 800.0",
-        "acceleration = 0.5",
-        "max_gain = 3000.0",
+        "gain = 400.0",
+        "max_gain = 2500.0",
+        "slow_speed = 0.2",
+        "fast_speed = 3.0",
+        "min_cutoff = 0.5",
+        "beta = 5.0",
         "[clutch]",
         "finger_open = 1.4",
         "hold_threshold = 0.3",
@@ -178,8 +185,14 @@ def test_printed_config_loads_back_unchanged(tmp_path: Path) -> None:
         ("[active_region]\nwidth_fraction = 1.5\n", "active_region.width_fraction"),
         ('[control]\nmode = "joystick"\n', "control.mode"),
         ("[relative]\ngain = 0\n", "relative.gain"),
-        ("[relative]\nacceleration = -1\n", "relative.acceleration"),
         ("[relative]\ngain = 900\nmax_gain = 800\n", "relative.max_gain"),
+        ("[relative]\nslow_speed = 3\nfast_speed = 2\n", "relative.slow_speed"),
+        ("[relative]\nslow_speed = 2\nfast_speed = 2\n", "relative.slow_speed"),
+        ("[relative]\nslow_speed = -0.1\n", "relative.slow_speed"),
+        ("[relative]\nfast_speed = 0\n", "relative.fast_speed"),
+        ("[relative]\nfast_speed = 99\n", "relative.fast_speed"),
+        ("[relative]\nmin_cutoff = 0\n", "relative.min_cutoff"),
+        ("[relative]\nbeta = -1\n", "relative.beta"),
         ("[relative]\ngian = 900\n", "relative.gian"),
         ("[clutch]\nscore_threshold = 2\n", "clutch.score_threshold"),
         ("[clutch]\ndebounce_ms = -5\n", "clutch.debounce_ms"),
@@ -232,15 +245,29 @@ def test_control_mode_flag_reaches_the_preview_config(
 def test_relative_and_clutch_values_come_from_the_file(tmp_path: Path) -> None:
     path = write(
         tmp_path,
-        "[relative]\ngain = 500\nacceleration = 0\nmax_gain = 500\n"
+        "[relative]\ngain = 500\nmax_gain = 500\nslow_speed = 0.5\nfast_speed = 5\n"
+        "min_cutoff = 1.5\nbeta = 2\n"
         "[clutch]\nscore_threshold = 0.7\ndebounce_ms = 50\n",
     )
 
     config = load_config(path)
 
-    assert (config.relative.gain, config.relative.acceleration) == (500.0, 0.0)
-    assert config.relative.max_gain == 500.0
+    assert (config.relative.gain, config.relative.max_gain) == (500.0, 500.0)
+    assert (config.relative.slow_speed, config.relative.fast_speed) == (0.5, 5.0)
+    assert (config.relative.min_cutoff, config.relative.beta) == (1.5, 2.0)
     assert (config.clutch.score_threshold, config.clutch.debounce_ms) == (0.7, 50.0)
+
+
+def test_an_old_config_with_acceleration_is_rejected_naming_the_new_keys(tmp_path: Path) -> None:
+    path = write(tmp_path, "[relative]\ngain = 800\nacceleration = 0.5\nmax_gain = 3000\n")
+
+    with pytest.raises(ConfigError) as error:
+        load_config(path)
+
+    message = str(error.value)
+    assert message.startswith("relative.acceleration: removed")
+    for key in ("relative.gain", "relative.max_gain", "relative.slow_speed", "relative.fast_speed"):
+        assert key in message
 
 
 def test_invalid_flag_value_names_the_key() -> None:

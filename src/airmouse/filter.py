@@ -4,6 +4,9 @@ It smooths hard while the Pointer is slow, so the cursor is steady when the
 hand is still, and eases off as the Pointer speeds up, so a fast move does not
 lag. `min_cutoff` (Hz) sets the smoothing at rest; `beta` sets how quickly the
 cutoff rises with speed. The speed estimate has its own fixed cutoff.
+
+`beta` counts speed in value units per second, unless a call gives a `speed_unit`:
+then speed is counted in those units, so relative mode can count it in hand sizes.
 """
 
 import math
@@ -30,7 +33,7 @@ class OneEuroFilter:
         """Forget the past, so the next sample passes through unchanged."""
         self._last = None
 
-    def __call__(self, time_s: float, value: float) -> float:
+    def __call__(self, time_s: float, value: float, speed_unit: float = 1.0) -> float:
         if self._last is None:
             self._last = (time_s, value, 0.0)
             return value
@@ -41,7 +44,7 @@ class OneEuroFilter:
         speed = last_speed + _alpha(DERIVATIVE_CUTOFF, dt) * (
             (value - last_value) / dt - last_speed
         )
-        cutoff = self._min_cutoff + self._beta * abs(speed)
+        cutoff = self._min_cutoff + self._beta * abs(speed) / speed_unit
         if cutoff <= 0:
             smoothed = last_value  # no cutoff at all: the output never moves
         else:

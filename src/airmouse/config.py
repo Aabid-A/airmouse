@@ -22,6 +22,16 @@ class ConfigError(Exception):
     """The configuration is invalid. The message names the offending key."""
 
 
+# Keys that older versions accepted, with what replaced them, so an old config file
+# fails with a pointer to the new keys instead of a bare "unknown key".
+REMOVED_KEYS = {
+    "relative.acceleration": (
+        "removed; the gain now rises smoothly from relative.gain to relative.max_gain "
+        "between relative.slow_speed and relative.fast_speed"
+    ),
+}
+
+
 def _bounded(
     default: Any,
     *,
@@ -66,17 +76,28 @@ class ControlConfig:
 
 @dataclass(frozen=True)
 class RelativeConfig:
-    """Relative control mode: how far the cursor moves for a Pointer movement.
+    """Relative control mode: how far the cursor moves for a Pointer movement, and how
+    much the Pointer is smoothed first.
 
-    `gain` is display points per hand size of Pointer movement, so the feel is the
-    same near or far from the camera. `acceleration` adds gain as the Pointer speeds
-    up: the gain is `gain * (1 + acceleration * speed)`, speed in hand sizes per
-    second, so 0 means none. `max_gain` caps the gain however fast the hand moves.
+    Gain is display points per hand size of Pointer movement, and speed is in hand
+    sizes per second, so the feel is the same near or far from the camera. At
+    `slow_speed` or slower the gain is `gain`, for fine aiming; at `fast_speed` or
+    faster it is `max_gain`, to cross the screen. In between it rises smoothly (a
+    smoothstep curve, with no steps or kinks), so `max_gain` is also the cap.
+
+    `min_cutoff` (Hz) and `beta` (Hz per hand size per second) set the One Euro
+    filter on the Pointer in relative mode: its cutoff is `min_cutoff + beta * speed`,
+    so it smooths hardest when the hand is slow, which keeps tremor off the cursor,
+    and relaxes as the hand speeds up, so a fast move does not lag. Lower `min_cutoff`
+    is steadier at rest; higher `beta` is less lag in fast moves.
     """
 
-    gain: float = _bounded(800.0, low=1.0, high=20000.0)
-    acceleration: float = _bounded(0.5, low=0.0, high=10.0)
-    max_gain: float = _bounded(3000.0, low=1.0, high=50000.0)
+    gain: float = _bounded(400.0, low=1.0, high=20000.0)
+    max_gain: float = _bounded(2500.0, low=1.0, high=50000.0)
+    slow_speed: float = _bounded(0.2, low=0.0, high=50.0)
+    fast_speed: float = _bounded(3.0, low=0.01, high=50.0)
+    min_cutoff: float = _bounded(0.5, low=0.01, high=30.0)
+    beta: float = _bounded(5.0, low=0.0, high=100.0)
 
 
 @dataclass(frozen=True)
@@ -113,7 +134,10 @@ class ClutchConfig:
 
 @dataclass(frozen=True)
 class FilterConfig:
-    """One Euro filter settings."""
+    """One Euro filter settings for absolute control mode, in display pixels.
+
+    Relative mode has its own, in hand sizes (`RelativeConfig.min_cutoff`, `beta`).
+    """
 
     min_cutoff: float = _bounded(1.0, low=0.0)
     beta: float = _bounded(0.007, low=0.0)
@@ -199,6 +223,9 @@ def _build_section(name: str, cls: type, raw: Mapping[str, Any]) -> Any:
     specs = {f.name: f for f in dataclasses.fields(cls)}
     values: dict[str, Any] = {}
     for key, value in raw.items():
+        removed = REMOVED_KEYS.get(f"{name}.{key}")
+        if removed is not None:
+            raise ConfigError(f"{name}.{key}: {removed}")
         if key not in specs:
             raise ConfigError(f"{name}.{key}: unknown key; valid keys are {', '.join(specs)}")
         values[key] = _check_value(f"{name}.{key}", specs[key], value)
@@ -222,8 +249,11 @@ def _build(raw: Mapping[str, Any]) -> Config:
         raise ConfigError("open_palm.finger_curled: must be below open_palm.finger_extended")
     if palm.thumb_weight + palm.spread_weight >= 1:
         raise ConfigError("open_palm.thumb_weight: with open_palm.spread_weight must total below 1")
-    if config.relative.max_gain < config.relative.gain:
+    relative = config.relative
+    if relative.max_gain < relative.gain:
         raise ConfigError("relative.max_gain: must be at least relative.gain")
+    if relative.slow_speed >= relative.fast_speed:
+        raise ConfigError("relative.slow_speed: must be below relative.fast_speed")
     clutch = config.clutch
     if clutch.finger_curled >= clutch.finger_open:
         raise ConfigError("clutch.finger_curled: must be below clutch.finger_open")
