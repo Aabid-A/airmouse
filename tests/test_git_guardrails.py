@@ -1,0 +1,398 @@
+"""The git-guardrails hook (.claude/hooks/git-guardrails.py), against a real temp repo.
+
+The repo's main checkout is on `main`; a linked worktree is on a task branch.
+Each test runs the hook on a Bash command and checks it is blocked (exit 2) or
+allowed (exit 0). Git config from HOME and the system is ignored.
+"""
+
+import importlib.util
+import io
+import json
+import os
+import subprocess
+import sys
+from dataclasses import dataclass
+from pathlib import Path
+from types import ModuleType
+
+import pytest
+
+HOOK = Path(__file__).resolve().parents[1] / ".claude" / "hooks" / "git-guardrails.py"
+BLOCK, ALLOW = 2, 0
+
+GIT_ENV = {
+    "GIT_CONFIG_GLOBAL": os.devnull,
+    "GIT_CONFIG_SYSTEM": os.devnull,
+    "GIT_AUTHOR_NAME": "Test",
+    "GIT_AUTHOR_EMAIL": "test@example.invalid",
+    "GIT_COMMITTER_NAME": "Test",
+    "GIT_COMMITTER_EMAIL": "test@example.invalid",
+}
+
+
+def load_hook() -> ModuleType:
+    spec = importlib.util.spec_from_file_location("git_guardrails", HOOK)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+hook = load_hook()
+
+
+@dataclass
+class Repo:
+    main: Path  # the main checkout, on `main`
+    worktree: Path  # a linked worktree on `agent/task`
+    plain: Path  # a directory that is not a git work tree
+
+
+def git(cwd: Path, *args: str) -> None:
+    env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")} | GIT_ENV
+    subprocess.run(["git", *args], cwd=cwd, env=env, check=True, capture_output=True)
+
+
+@pytest.fixture
+def repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Repo:
+    for name in ("GIT_DIR", "GIT_WORK_TREE", "CDPATH"):
+        monkeypatch.delenv(name, raising=False)
+    for name, value in GIT_ENV.items():
+        monkeypatch.setenv(name, value)
+    main = tmp_path / "main"
+    main.mkdir()
+    git(main, "init", "-q", "-b", "main")
+    (main / "file.txt").write_text("hello\n")
+    git(main, "add", "file.txt")
+    git(main, "commit", "-q", "-m", "first")
+    worktree = tmp_path / "wt"
+    git(main, "worktree", "add", "-q", "-b", "agent/task", str(worktree))
+    plain = tmp_path / "plain"
+    plain.mkdir()
+    return Repo(main=main, worktree=worktree, plain=plain)
+
+
+def hook_input(command: str, cwd: Path) -> str:
+    return json.dumps({"tool_name": "Bash", "tool_input": {"command": command}, "cwd": str(cwd)})
+
+
+def run_in_process(command: str, cwd: Path, monkeypatch: pytest.MonkeyPatch) -> int:
+    monkeypatch.setattr(sys, "stdin", io.StringIO(hook_input(command, cwd)))
+    return hook.main()
+
+
+def run_subprocess(stdin: str) -> subprocess.CompletedProcess[str]:
+    env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")} | GIT_ENV
+    env.pop("CDPATH", None)
+    return subprocess.run(
+        [sys.executable, str(HOOK)], input=stdin, env=env, capture_output=True, text=True
+    )
+
+
+def check(repo: Repo, mp: pytest.MonkeyPatch, command: str, session: Path | None = None) -> int:
+    return run_in_process(command, session or repo.main, mp)
+
+
+# (1) and (9): no cd or -C judges the session cwd.
+
+
+def test_commit_in_session_cwd_on_main_is_blocked(repo: Repo, monkeypatch: pytest.MonkeyPatch):
+    assert check(repo, monkeypatch, "git commit -m x") == BLOCK
+
+
+def test_commit_in_session_cwd_on_task_branch_is_allowed(
+    repo: Repo, monkeypatch: pytest.MonkeyPatch
+):
+    assert check(repo, monkeypatch, "git commit -m x", repo.worktree) == ALLOW
+
+
+def test_detached_head_is_allowed_as_before(
+    repo: Repo, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
+    detached = tmp_path / "detached"
+    git(repo.main, "worktree", "add", "-q", "--detach", str(detached))
+    assert check(repo, monkeypatch, "git commit -m x", detached) == ALLOW
+    assert check(repo, monkeypatch, f"cd {detached} && git commit -m x") == ALLOW
+
+
+# (2), (3), (4): cd and -C are followed, in both directions.
+
+
+def test_cd_into_worktree_then_commit_is_allowed(repo: Repo, monkeypatch: pytest.MonkeyPatch):
+    assert check(repo, monkeypatch, f"cd {repo.worktree} && git commit -m x") == ALLOW
+
+
+def test_git_dash_c_worktree_commit_is_allowed(repo: Repo, monkeypatch: pytest.MonkeyPatch):
+    assert check(repo, monkeypatch, f"git -C {repo.worktree} commit -m x") == ALLOW
+
+
+@pytest.mark.parametrize("form", ["git -C {main} commit -m x", "cd {main} && git commit -m x"])
+def test_commit_targeting_main_is_blocked_even_from_a_worktree_session(
+    repo: Repo, monkeypatch: pytest.MonkeyPatch, form: str
+):
+    command = form.format(main=repo.main)
+    assert check(repo, monkeypatch, command) == BLOCK
+    assert check(repo, monkeypatch, command, repo.worktree) == BLOCK
+
+
+# (5): paths that don't resolve to a git work tree.
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "cd /nonexistent/guardrail && git commit -m x",
+        "git -C /nonexistent/guardrail commit -m x",
+        "cd {plain} && git commit -m x",
+        "git -C {plain} commit -m x",
+        "cd {main}/.git && git commit -m x",
+    ],
+)
+def test_commit_outside_a_work_tree_is_blocked(
+    repo: Repo, monkeypatch: pytest.MonkeyPatch, command: str
+):
+    command = command.format(plain=repo.plain, main=repo.main)
+    assert check(repo, monkeypatch, command, repo.worktree) == BLOCK
+
+
+def test_commit_in_session_cwd_outside_a_work_tree_is_blocked(
+    repo: Repo, monkeypatch: pytest.MonkeyPatch
+):
+    assert check(repo, monkeypatch, "git commit -m x", repo.plain) == BLOCK
+
+
+# (6): the target can't be worked out statically.
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "cd && git commit -m x",
+        "cd - && git commit -m x",
+        "cd ~ && git commit -m x",
+        "cd ~/wt && git commit -m x",
+        "cd $WT && git commit -m x",
+        'cd "$WT" && git commit -m x',
+        "cd $(pwd) && git commit -m x",
+        "cd `pwd` && git commit -m x",
+        "cd {wt}* && git commit -m x",
+        "cd {wt} {main} && git commit -m x",
+        "git -C $WT commit -m x",
+        "git -C ~ commit -m x",
+        "(cd {wt} && git commit -m x)",
+        "{{ cd {wt}; git commit -m x; }}",
+        "bash -c 'cd {wt} && git commit -m x'",
+        "sh -c 'git commit -m x'",
+        "eval 'git commit -m x'",
+        "env git commit -m x",
+        "eval cd {main}; git -C {wt} status; git commit -m x",
+        "pushd {wt} && git commit -m x",
+        "pushd {wt} && popd && git commit -m x",
+        "git --git-dir={main}/.git commit -m x",
+        "git --work-tree {wt} commit -m x",
+        "GIT_DIR={main}/.git git commit -m x",
+        "GIT_WORK_TREE={wt} git commit -m x",
+        "export GIT_DIR={main}/.git; git commit -m x",
+        "git -c alias.ci=commit ci -m x",
+        "alias g='git -C {main}'\ng commit -m x",
+        'g() {{ git -C {main} "$@"; }}; g commit -m x',
+        "$GIT commit -m x",
+        "if true; then git commit -m x; fi",
+        "cd {main} | true; git commit -m x",
+        "git commit -m 'unbalanced",
+        'echo "$(cd {main} && git commit -am x)"',
+        'git commit -m "$(git commit -am y)"',
+        "git commit -F - <<EOF\nmessage\n",
+    ],
+)
+def test_commit_with_an_unknowable_target_is_blocked(
+    repo: Repo, monkeypatch: pytest.MonkeyPatch, command: str
+):
+    command = command.format(wt=repo.worktree, main=repo.main)
+    monkeypatch.setenv("WT", str(repo.worktree))
+    assert check(repo, monkeypatch, command, repo.worktree) == BLOCK
+
+
+def test_git_dir_in_the_environment_blocks_commits(repo: Repo, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("GIT_DIR", str(repo.main / ".git"))
+    assert check(repo, monkeypatch, "git commit -m x", repo.worktree) == BLOCK
+
+
+def test_relative_cd_with_cdpath_set_is_blocked(repo: Repo, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("CDPATH", str(repo.main.parent))
+    assert check(repo, monkeypatch, "cd wt && git commit -m x", repo.main.parent) == BLOCK
+
+
+# (7): relative paths, trailing slashes, symlinks.
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "cd wt && git commit -m x",
+        "cd ./wt/ && git commit -m x",
+        "git -C wt commit -m x",
+        "git -C wt/ commit -m x",
+        "cd main && git -C ../wt commit -m x",
+        "git -C main -C ../wt commit -m x",
+        "cd -P wt && git commit -m x",
+        "cd -- wt && git commit -m x",
+    ],
+)
+def test_relative_paths_into_the_worktree_are_allowed(
+    repo: Repo, monkeypatch: pytest.MonkeyPatch, command: str
+):
+    assert check(repo, monkeypatch, command, repo.main.parent) == ALLOW
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "cd ../main && git commit -m x",
+        "cd ../main/ && git commit -m x",
+        "git -C ../main commit -m x",
+        "git -C .. -C main commit -m x",
+        "cd .. && git -C main commit -m x",
+    ],
+)
+def test_relative_paths_back_to_main_are_blocked(
+    repo: Repo, monkeypatch: pytest.MonkeyPatch, command: str
+):
+    assert check(repo, monkeypatch, command, repo.worktree) == BLOCK
+
+
+def test_symlink_to_the_main_checkout_is_judged_as_main(
+    repo: Repo, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
+    link = tmp_path / "link"
+    link.symlink_to(repo.main)
+    assert check(repo, monkeypatch, f"cd {link} && git commit -m x", repo.worktree) == BLOCK
+    assert check(repo, monkeypatch, f"git -C {link} commit -m x", repo.worktree) == BLOCK
+    assert check(repo, monkeypatch, "git commit -m x", link) == BLOCK
+
+
+def test_symlink_to_the_worktree_is_allowed(
+    repo: Repo, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
+    link = tmp_path / "wtlink"
+    link.symlink_to(repo.worktree)
+    assert check(repo, monkeypatch, f"cd {link} && git commit -m x") == ALLOW
+
+
+# (8): chains and separators.
+
+
+@pytest.mark.parametrize(
+    ("command", "expected"),
+    [
+        ("cd {root} && cd wt && git commit -m x", ALLOW),
+        ("cd {wt} && cd {main} && git commit -m x", BLOCK),
+        ("cd {main} && cd {wt} && git commit -m x", ALLOW),
+        ("cd {wt}; git commit -m x", ALLOW),
+        ("cd {main}; git commit -m x", BLOCK),
+        ("cd {wt}\ngit commit -m x", ALLOW),
+        ("cd {main}\ngit commit -m x", BLOCK),
+        ("false || git commit -m x", BLOCK),
+        ("cd {wt} && git add -A && git commit -m x && git push -u origin agent/task", ALLOW),
+        ("cd {wt} && git commit -m x; cd {main} && git commit -m y", BLOCK),
+        ("cd {wt} # enter the worktree\ngit commit -m x", ALLOW),
+        ("cd {wt} && git commit -m 'fix; cd {main}'", ALLOW),
+        ("cd {wt} > /dev/null && git commit -m x", ALLOW),
+        ("cd {wt} && \\\ngit commit -m x", ALLOW),
+        ("cd $X; git -C {wt} commit -m x", ALLOW),
+        ("cd $X; git -C {main} commit -m x", BLOCK),
+        ("cd $X; git -C wt commit -m x", BLOCK),
+        ("cd {main} && \\\ngit commit -m x", BLOCK),
+    ],
+)
+def test_chains_follow_every_cd(
+    repo: Repo, monkeypatch: pytest.MonkeyPatch, command: str, expected: int
+):
+    command = command.format(root=repo.main.parent, wt=repo.worktree, main=repo.main)
+    assert check(repo, monkeypatch, command) == expected
+
+
+def test_heredoc_commit_message_in_the_worktree_is_allowed(
+    repo: Repo, monkeypatch: pytest.MonkeyPatch
+):
+    message = "Fix the git commit check\n\nDon't block worktrees.\n"
+    substitution = f"git commit -m \"$(cat <<'EOF'\n{message}EOF\n)\""
+    heredoc = f"git commit -F - <<'EOF'\n{message}EOF"
+    for form in (substitution, heredoc):
+        assert check(repo, monkeypatch, f"cd {repo.worktree} && {form}") == ALLOW
+        assert check(repo, monkeypatch, form) == BLOCK
+
+
+# (10): the other rules are unchanged and ordinary commands pass.
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "git push --force origin agent/task",
+        "git push -f",
+        "git push origin main",
+        "git reset --hard HEAD~1",
+        "git clean -fd",
+        "git checkout .",
+        "git restore .",
+        "git branch -D main",
+    ],
+)
+def test_existing_rules_still_block(repo: Repo, monkeypatch: pytest.MonkeyPatch, command: str):
+    assert check(repo, monkeypatch, command, repo.worktree) == BLOCK
+    assert check(repo, monkeypatch, f"cd {repo.worktree} && {command}") == BLOCK
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "git status",
+        "git log --oneline -3",
+        "git push --force-with-lease origin agent/task",
+        "git log --grep commit",
+        "cd ~ && ls",
+        "ls 'unbalanced",
+    ],
+)
+def test_ordinary_commands_pass(repo: Repo, monkeypatch: pytest.MonkeyPatch, command: str):
+    assert check(repo, monkeypatch, command) == ALLOW
+
+
+# The hook as Claude Code runs it: JSON on stdin, exit code, message on stderr.
+
+
+def test_subprocess_blocks_a_commit_on_main_with_a_message(repo: Repo):
+    result = run_subprocess(hook_input("git commit -m x", repo.main))
+    assert result.returncode == BLOCK
+    assert "BLOCKED by git-guardrails: committing on main" in result.stderr
+
+
+@pytest.mark.parametrize(
+    ("form", "expected"),
+    [
+        ("cd {wt} && git commit -m x", ALLOW),
+        ("git -C {wt} commit -m x", ALLOW),
+        ("cd {main} && git commit -m x", BLOCK),
+        ("git -C /nonexistent/guardrail commit -m x", BLOCK),
+        ("git push --force", BLOCK),
+        ("git status", ALLOW),
+    ],
+)
+def test_subprocess_decisions(repo: Repo, form: str, expected: int):
+    command = form.format(wt=repo.worktree, main=repo.main)
+    session = repo.worktree if "main}" in form else repo.main
+    assert run_subprocess(hook_input(command, session)).returncode == expected
+
+
+def test_subprocess_reports_why_an_unresolvable_path_is_blocked(repo: Repo):
+    result = run_subprocess(hook_input("cd /nonexistent/guardrail && git commit", repo.main))
+    assert result.returncode == BLOCK
+    assert "does not exist" in result.stderr
+
+
+def test_non_bash_tools_and_bad_input(repo: Repo):
+    other = json.dumps({"tool_name": "Read", "tool_input": {"file_path": "x"}, "cwd": "/"})
+    assert run_subprocess(other).returncode == ALLOW
+    assert run_subprocess("not json").returncode == ALLOW
+    assert run_subprocess("not json: git commit -m x").returncode == BLOCK
