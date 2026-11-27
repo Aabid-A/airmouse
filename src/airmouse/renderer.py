@@ -26,6 +26,7 @@ import numpy as np
 from airmouse.controller import FistReading, PalmReading, Phase, State
 from airmouse.frame import Region, active_region
 from airmouse.gestures import LANDMARK_COUNT, Landmarks, Point
+from airmouse.scroll import ScrollReading, ScrollState
 
 # The canvas: 16:9 so a screen recording of the window is a standard video shape.
 # 640x360 is shown at 2x (1280x720) by the window. All layout below is in canvas pixels.
@@ -159,6 +160,10 @@ DEBUG_BAR_OFFSET = GLYPH_HEIGHT + 3  # from the top of a meter's text to its bar
 DEBUG_TICK_OVERHANG = 2
 DEBUG_LINE = 10
 DEBUG_FIST_TOP = DEBUG_TOP + 2 * DEBUG_ROW + 2 * DEBUG_LINE + 4  # under COUNTS and STEADY
+DEBUG_SCROLL_TOP = DEBUG_FIST_TOP + 2 * DEBUG_ROW  # under the Fist meters (or their place)
+DEBUG_SCROLL_STATE_TOP = DEBUG_SCROLL_TOP + DEBUG_ROW  # the scroll state line, under TWO
+DEBUG_OFFSET_RANGE = 1.0  # the scroll offset bar is full at this many hand sizes
+DEBUG_RATE_CAP = 99999.0  # scroll speeds are shown in whole pixels per second
 DEBUG_SPEED_RANGE = 2.0  # the speed bar is full at this many times its limit
 DEBUG_NUMBER_CAP = 99.9
 
@@ -186,11 +191,16 @@ class DebugReadout:
     """What `--debug-gestures` draws: the palm reading, then rows of (name, value) on the right:
     stage timings in ms and, last, the tracking and window rates in frames per second.
     `fist`, when given (relative mode), adds the Fist score against the clutch threshold
-    and the finger curl against the hold threshold under the palm."""
+    and the finger curl against the hold threshold under the palm. `scroll`, when given,
+    adds the two-finger score against its entry (or, while scrolling, exit) threshold,
+    the scroll state, the smoothed offset from the anchor against the deadzone, the
+    scroll speed against its cap and the flick measure against the flick speed, under
+    the Fist's place."""
 
     palm: PalmReading
     timings: tuple[tuple[str, float], ...] = ()
     fist: FistReading | None = None
+    scroll: ScrollReading | None = None
 
 
 @dataclass
@@ -278,6 +288,7 @@ def render_preview(
     view: FrameView = DEFAULT_VIEW,
     clutch: bool = False,
     holding: bool = False,
+    scrolling: bool = False,
 ) -> Image:
     """The Preview for a state.
 
@@ -290,12 +301,12 @@ def render_preview(
     `show_camera_image` is True: the default Privacy preview ignores it. `debug`
     adds the gesture readout. `no_hand` (the No hand state) shows NO HAND, and
     `clutch` (the Fist clutch is held) shows CLUTCH, and `holding` (the cursor holds
-    still while the fingers are curled) shows HOLD. `view` is the prepared frame's
-    size and the Active region.
+    still while the fingers are curled) shows HOLD, and `scrolling` (a Scroll is in
+    progress) shows SCROLL. `view` is the prepared frame's size and the Active region.
     """
     canvas = _base(view, camera_on, REGION_PREVIEW, camera_image, show_camera_image)
     paused = state is State.PAUSED
-    still = no_hand or clutch or holding
+    still = no_hand or clutch or holding or scrolling
     pressed = not paused and not still and phase is not Phase.IDLE
     if paused:
         _draw_hold_ring(canvas, view, hold_progress)
@@ -304,6 +315,8 @@ def render_preview(
         _draw_label(canvas, "NO HAND", TEXT_PAUSED, "SHOW YOUR HAND TO THE CAMERA")
     elif clutch:
         _draw_label(canvas, "CLUTCH", TEXT_PAUSED, "POINT TO MOVE AGAIN")
+    elif scrolling:
+        _draw_label(canvas, "SCROLL", TEXT_PINCH, "MOVE UP OR DOWN")
     elif holding:
         _draw_label(canvas, "HOLD", TEXT_PAUSED, "STRAIGHTEN YOUR FINGER TO MOVE")
     elif phase is Phase.DRAGGING:
@@ -760,11 +773,76 @@ def _draw_debug(canvas: Canvas, readout: DebugReadout) -> None:
             full=1.0,
             good=fist.curl is not None and fist.curl < fist.hold_threshold,
         )
+    if readout.scroll is not None:
+        _draw_scroll_debug(canvas, readout.scroll)
     for line, (name, milliseconds) in enumerate(readout.timings):
         text = f"{name} {_number(milliseconds)}"
         left = WIDTH - DEBUG_LEFT - _text_width(text, DEBUG_SIZE, DEBUG_TRACKING)
         top = DEBUG_TOP + line * DEBUG_LINE
         _draw_text(canvas, text, left, top, DEBUG_SIZE, DEBUG_TRACKING, STATUS_TEXT)
+
+
+def _direction(value: float | None) -> str:
+    """UP or DOWN for a signed scroll offset or speed, nothing for none or zero."""
+    if value is None or value == 0:
+        return ""
+    return "UP " if value > 0 else "DOWN "
+
+
+def _draw_scroll_debug(canvas: Canvas, scroll: ScrollReading) -> None:
+    exit_text = _number(scroll.exit_threshold, places=2)
+    _draw_meter(
+        canvas,
+        DEBUG_SCROLL_TOP,
+        f"TWO {_number(scroll.score, places=2)}/{_number(scroll.threshold, places=2)}"
+        f" OUT {exit_text}",
+        fraction=scroll.score,
+        mark=scroll.threshold if not scroll.scrolling else scroll.exit_threshold,
+        full=1.0,
+        good=scroll.counts,
+    )
+    state = scroll.state
+    colour = (
+        TEXT_ACTIVE
+        if state is ScrollState.SCROLLING
+        else STATUS_TEXT
+        if state is ScrollState.IDLE
+        else TEXT_PAUSED
+    )
+    text = f"SCROLL {state.value.upper()}"
+    _draw_text(canvas, text, DEBUG_LEFT, DEBUG_SCROLL_STATE_TOP, DEBUG_SIZE, 1, colour)
+    top = DEBUG_SCROLL_STATE_TOP + DEBUG_LINE
+    offset = None if scroll.offset is None else abs(scroll.offset)
+    _draw_meter(
+        canvas,
+        top,
+        f"OFFSET {_direction(scroll.offset)}"
+        f"{_number(offset, places=2)}/{_number(scroll.deadzone, places=2)}",
+        fraction=offset,
+        mark=scroll.deadzone,
+        full=DEBUG_OFFSET_RANGE,
+        good=offset is not None and offset > scroll.deadzone,
+    )
+    rate = f"{_number(abs(scroll.speed), DEBUG_RATE_CAP, 0)}"
+    _draw_meter(
+        canvas,
+        top + DEBUG_ROW,
+        f"RATE {_direction(scroll.speed)}{rate}/{_number(scroll.max_speed, DEBUG_RATE_CAP, 0)}",
+        fraction=abs(scroll.speed) if scroll.scrolling else None,
+        mark=scroll.max_speed,
+        full=scroll.max_speed,
+        good=scroll.scrolling,
+    )
+    flick = None if scroll.flick is None else abs(scroll.flick)
+    _draw_meter(
+        canvas,
+        top + 2 * DEBUG_ROW,
+        f"FLICK {_direction(scroll.flick)}{_number(flick)}/{_number(scroll.flick_speed)}",
+        fraction=flick,
+        mark=scroll.flick_speed,
+        full=scroll.flick_speed * DEBUG_SPEED_RANGE,
+        good=flick is not None and flick >= scroll.flick_speed,
+    )
 
 
 def _fill(canvas: Canvas, left: int, top: int, width: int, height: int, colour: Colour) -> None:

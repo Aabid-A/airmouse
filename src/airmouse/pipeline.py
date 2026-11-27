@@ -36,6 +36,7 @@ from airmouse.frame import Frame, Region, prepare_frame
 from airmouse.gestures import Point
 from airmouse.output import OutputError
 from airmouse.renderer import FrameView
+from airmouse.scroll import ScrollReading
 from airmouse.tracker import Tracker
 
 MAX_MISSED_FRAMES = 100  # this many empty reads in a row means the camera has gone
@@ -119,6 +120,9 @@ class ShutdownOutput:
 
     def release_drag(self) -> None:
         self._forward(self._output.release_drag)
+
+    def scroll(self, pixels: int) -> None:
+        self._forward(lambda: self._output.scroll(pixels))
 
     def displays(self) -> tuple[Display, ...]:
         screen = self._screen
@@ -231,6 +235,7 @@ class ControllerStatus:
     clutch: bool = False
     holding: bool = False
     fist: FistReading | None = None
+    scroll: ScrollReading | None = None
 
     @classmethod
     def of(cls, controller: Controller) -> "ControllerStatus":
@@ -243,6 +248,7 @@ class ControllerStatus:
             controller.clutch,
             controller.holding,
             controller.fist_reading,
+            controller.scroll_reading,
         )
 
 

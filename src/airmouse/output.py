@@ -3,7 +3,7 @@
 Quartz comes from `pyobjc-framework-Quartz`, a darwin-only dependency, so it is
 imported lazily and only by `QuartzOutput.open()`. The class itself takes the
 Quartz module as an argument, so tests drive it with a fake on any platform.
-Moves, left mouse down, up and dragged exist; scroll comes with a later issue.
+Moves, left mouse down, up and dragged, and scroll wheel events in pixels.
 It also reads the active displays and the cursor's current position, for relative
 control mode. Every coordinate is a Quartz global coordinate in points (the main
 display's top left is the origin), so Retina displays need no special handling.
@@ -101,14 +101,28 @@ class QuartzOutput:
             if self._down:
                 self.release(*self._last)
 
+    def scroll(self, pixels: int) -> None:
+        """A vertical scroll wheel event of `pixels` (pixel units, one wheel): positive
+        scrolls up (content above comes into view). It never moves the cursor or the button."""
+        quartz = self._quartz
+        unit = quartz.kCGScrollEventUnitPixel
+        with self._lock:
+            self._send(quartz.CGEventCreateScrollWheelEvent(None, unit, 1, pixels), "scroll")
+
     def _post(self, kind: int, x: float, y: float) -> None:
         quartz = self._quartz
         self._last = (x, y)
         point = (self._origin[0] + x, self._origin[1] + y)
-        event = quartz.CGEventCreateMouseEvent(None, kind, point, quartz.kCGMouseButtonLeft)
+        self._send(
+            quartz.CGEventCreateMouseEvent(None, kind, point, quartz.kCGMouseButtonLeft), "mouse"
+        )
+
+    def _send(self, event: Any, kind: str) -> None:
+        """Post `event`, or say which `kind` of event macOS refused to create."""
+        quartz = self._quartz
         if event is None:
             raise OutputError(
-                "macOS refused to create a mouse event. Check the Accessibility permission "
+                f"macOS refused to create a {kind} event. Check the Accessibility permission "
                 "for your terminal app in System Settings > Privacy & Security."
             )
         quartz.CGEventPost(quartz.kCGHIDEventTap, event)

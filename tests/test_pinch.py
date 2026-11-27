@@ -61,6 +61,9 @@ class RecordingOutput:
         self.down = False
         self._record("release_drag")
 
+    def scroll(self, pixels: int) -> None:
+        self._record("scroll", pixels)
+
     def kinds(self) -> list[str]:
         return [event[0] for event in self.events]
 

@@ -40,13 +40,24 @@ the thumb:
 Following resumes from where the cursor is, with no movement on the first frame.
 Without a `ClutchConfig` (absolute mode) none of this applies: the behaviour is
 exactly that of absolute mode before relative mode existed.
+
+The Scroll works in both control modes; its motion (entry, grace, smoothing, flick)
+is in `airmouse.scroll`. The Controller only decides when it may run: while active, and
+never with a closed Pinch, the clutch (a Fist held for `clutch.debounce_ms`, relative
+mode) or an Open palm, which all end it at once, as do pausing and No hand. While a
+scroll is active the cursor holds still, a Pinch cannot start and no button is ever
+pressed; a drag in progress is released when one starts. After any scroll a Pinch that
+closed must open before it can click, as after No hand. While a scroll is on, a Hand that
+still reads as the two-finger pose does not count as an Open palm (two fingers tilted
+towards the camera can look like one); with no scroll on, the Open palm and pausing are
+exactly as without the Scroll.
 """
 
 from dataclasses import dataclass
 from enum import Enum
 from typing import Protocol
 
-from airmouse.config import ClutchConfig, OpenPalmConfig, PinchConfig, TimingConfig
+from airmouse.config import ClutchConfig, OpenPalmConfig, PinchConfig, ScrollConfig, TimingConfig
 from airmouse.gestures import (
     INDEX_MCP,
     LANDMARK_COUNT,
@@ -62,8 +73,10 @@ from airmouse.gestures import (
     index_reach,
     open_palm_score,
     pinch_ratio,
+    two_finger_score,
 )
 from airmouse.mapping import CursorPath
+from airmouse.scroll import Scroll, ScrollReading
 
 # The wrist speed is smoothed over a few frames (weight of the newest frame), so
 # one frame of landmark jitter cannot restart the Hold ring.
@@ -133,6 +146,10 @@ class Output(Protocol):
 
     def release_drag(self) -> None: ...
 
+    def scroll(self, pixels: int) -> None:
+        """Scroll by `pixels`: positive scrolls up (content above comes into view)."""
+        ...
+
 
 class Controller:
     def __init__(
@@ -143,8 +160,10 @@ class Controller:
         open_palm: OpenPalmConfig | None = None,
         pinch: PinchConfig | None = None,
         clutch: ClutchConfig | None = None,
+        scroll: ScrollConfig | None = None,
     ) -> None:
         self._timing = timing
+        self._two_finger: float | None = None  # two-finger score this frame, None with no Hand
         self._clutch_config = clutch  # None: no clutch (absolute mode)
         self._fist: float | None = None  # Fist score this frame, None with no Hand
         self._curl = 0.0  # how curled the fingers are, ignoring the thumb
@@ -166,6 +185,8 @@ class Controller:
         self._score: float | None = None
         self._speed: float | None = None
         self._output = output
+        self._scroll_config = scroll or ScrollConfig()
+        self._scroll = Scroll(self._scroll_config, output)
         self._cursor = cursor
         self.state = State.PAUSED
         self._now = 0.0
@@ -226,6 +247,16 @@ class Controller:
         )
 
     @property
+    def scrolling(self) -> bool:
+        """True while a Scroll is active (active, with the Hand in view)."""
+        return self._scroll.active and self.state is State.ACTIVE and not self.no_hand
+
+    @property
+    def scroll_reading(self) -> ScrollReading:
+        """The latest frame's two-finger score and scroll state, offset, speed and flick."""
+        return self._scroll.reading
+
+    @property
     def reading(self) -> PalmReading:
         """The latest frame's Open palm score and wrist speed against their limits."""
         score, speed = self._score, self._speed
@@ -249,8 +280,11 @@ class Controller:
             self._latched = False
             self._reset_run()
             self._track_clutch(landmarks)
+            if self._track_scroll(landmarks):
+                return  # scrolling: the cursor holds still and no Pinch can start
             self._follow(landmarks)
             return
+        self._end_scroll()  # an Open palm ends a scroll at once
         self._fist_since = None
         self._clutched = False  # an Open palm is never a Fist
         self._holding = False
@@ -281,6 +315,8 @@ class Controller:
             self._frozen = None
             self._fist_since = None
             self._clutched = False  # No hand is a clutch of its own
+            if self._scroll.block():  # a returning Hand must form the pose again
+                self._must_open = True
             if self._cursor is not None:
                 self._cursor.reset()
 
@@ -310,6 +346,29 @@ class Controller:
             self._must_open = True
             if self._cursor is not None:
                 self._cursor.reset()
+
+    def _track_scroll(self, landmarks: Landmarks | None) -> bool:
+        """Run the Scroll for this frame if it may run. True while a scroll is active."""
+        # These end a scroll at once, with no grace. A Fist ends it through the clutch,
+        # once it has lasted `clutch.debounce_ms`, so a single frame of tilted two fingers
+        # read as a Fist does not cut the scroll.
+        allowed = not (self.state is not State.ACTIVE or self._clutched or self._pinch.closed)
+        was = self._scroll.active
+        scrolling = self._scroll.update(self._now, landmarks, self._two_finger, allowed=allowed)
+        if scrolling:
+            if not was and self._phase is not Phase.IDLE:
+                self.release_drag()  # never scroll with the button down
+            self._holding = False
+            if self._cursor is not None:
+                self._cursor.reset()  # drop any movement, so following resumes without a jump
+        elif was:
+            self._must_open = True  # a Pinch that closed while scrolling never clicks
+        return scrolling
+
+    def _end_scroll(self) -> None:
+        """Stop any Scroll at once. A Pinch must open afterwards."""
+        if self._scroll.end():
+            self._must_open = True
 
     def release_drag(self) -> None:
         """End any Pinch in progress and lift the mouse button, whatever the Hand is doing."""
@@ -443,8 +502,23 @@ class Controller:
             self._fist = fist_score(landmarks, clutch)
             self._curl = finger_curl(landmarks, clutch)
             self._reach = index_reach(landmarks)
+        self._two_finger = (
+            None if landmarks is None else two_finger_score(landmarks, self._scroll_config)
+        )
         if self._pinch.closed and self._score is not None:
             self._score = 0.0  # a closed Pinch never counts as an Open palm
+        if self._pinch.closed and self._two_finger is not None:
+            self._two_finger = 0.0  # nor as the two-finger pose
+        if (
+            self._scroll.active
+            and self._two_finger is not None
+            and self._two_finger >= self._scroll_config.exit_threshold
+            and self._score is not None
+        ):
+            # While a scroll is on, two fingers tilted towards the camera are not an Open
+            # palm. With no scroll on, the Open palm reads exactly as it would without the
+            # Scroll, so pausing never changes.
+            self._score = 0.0
         if landmarks is None or len(landmarks) != LANDMARK_COUNT or hand_size(landmarks) <= 0:
             self._speed = None
             self._wrist = None

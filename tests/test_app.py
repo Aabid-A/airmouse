@@ -386,6 +386,9 @@ class RecordingOutput:
     def release_drag(self) -> None:
         pass
 
+    def scroll(self, pixels: int) -> None:
+        pass
+
 
 class PalmThenPointing:
     """An open palm for the first `palm_s` seconds, then a pointing Hand."""

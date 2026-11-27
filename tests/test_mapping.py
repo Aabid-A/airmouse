@@ -38,6 +38,9 @@ class FakeOutput:
     def release_drag(self) -> None:
         pass
 
+    def scroll(self, pixels: int) -> None:
+        pass
+
 
 def pointer_at(x: float, y: float) -> Landmarks:
     hand = list(pointing_hand())

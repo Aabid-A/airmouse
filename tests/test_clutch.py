@@ -85,6 +85,9 @@ class FakeMac:
         self.down = False
         self.events.append(("release_drag",))
 
+    def scroll(self, pixels: int) -> None:
+        self.events.append(("scroll", pixels))
+
     def kinds(self) -> list[str]:
         return [event[0] for event in self.events]
 
