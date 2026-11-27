@@ -50,14 +50,14 @@ the user didn't confirm. Private by default. Small ad-hoc tasks can skip issues.
 **Human-verified issues** (label `human-verified`) need the user to check
 something by hand, such as hardware, feel or a live demo. For these the PR says
 `Refs #<n>`, never `Closes`, so merging doesn't close the issue. Criteria that
-need the human stay unticked, marked "(needs you)". An agent may merge the PR
-under the Merging rules; the issue stays open and only the user closes it, after
-testing. Every other issue uses `Closes #<n>`.
+need the human stay unticked, marked "(needs you)". The PR is parked under
+the Merge policy (human-verified) and the user merges it; the issue stays open
+and only the user closes it, after testing. Every other issue uses `Closes #<n>`.
 
 **Blockers.** `Blocked by #n` is a hard gate: it holds until issue n is closed.
 A human-verified issue stays open until the user closes it, so it is not listed
 under `Blocked by` unless the user names it as a gate. List it as `Builds on #n`
-instead: start once its PR is merged to `main` (agents merge those PRs too),
+instead: start once its PR is merged to `main` (the user merges those PRs),
 whether or not the user has closed the issue. If testing later fails, the fix
 goes in that issue.
 
@@ -70,8 +70,8 @@ goes in that issue.
 3. **Prove.** Run `scripts/check.sh`. For changed behaviour, `/prove`: the
    failure before the fix and the success after. For UI, `/design-review`.
 4. **Ship.** `/ship`: commit, rebase, push, open the PR (`/pr` writes the body),
-   then `/review-loop` until the gate passes. Merge if the Merging rules below
-   allow it; either way end with the PR URL.
+   then `/review-loop` until the gate passes. Turn on auto-merge if the Merge policy
+   below allows it; either way end with the PR URL.
 
 When a task went badly, or every few PRs, run `/retro` to improve the setup.
 
@@ -99,37 +99,6 @@ ruleset is satisfied. Safe means all of:
 Anything else is **parked**: label the issue `parked`, say why in a PR comment,
 and leave the merge to the user. If "Auto-merge" in Conventions is `off`, park
 every PR.
-
-## Merging
-
-An agent may merge its own PR (squash, pinned to the reviewed head commit) once
-all of these hold on that commit:
-
-- Every CI job is green on that head commit (a skipped or cancelled job is not
-  green), and there is no merge conflict.
-- The review gate passed from an independent context (a subagent, another
-  session or a review bot; not the agent that wrote the code), and its result is
-  a comment on the PR that names that head commit. A self-review never counts:
-  hand the PR to the user.
-- A PR that links a `human-verified` issue uses only `Refs`, in the PR body and
-  in the squash commit message (never `Closes` or `Fixes`); if not, fix it
-  before merging. Merging then leaves the issue open. The agent never closes
-  it; the user does, after testing.
-- The PR does not change the rules or brakes: `AGENTS.md`, `CLAUDE.md`,
-  `.claude/`, `.agents/`, `.cursor/`, `.githooks/`, `.github/`,
-  `CODING_STANDARDS.md` or `scripts/`, and it does not add or remove a
-  dependency (`pyproject.toml` dependency lists, `uv.lock`). The user merges
-  those.
-- The PR does not loosen lint, type or test rules: no new ignores or excludes
-  (in config, including per-file ignores, or inline as `# noqa`, `# type: ignore`,
-  `# pyright: ignore` or `# pragma: no cover`), no removed lint rules or weaker
-  type-checking mode, no lower thresholds, and no skipped, deselected, xfail or
-  removed tests. The user merges those.
-- The PR's merge danger is a two-way door (a one-way door is a destructive
-  action; see below).
-
-Never merge on red, stale or missing CI or review, and never use an override
-(`SKIP_CHECKS`, `ALLOW_MAIN`, plain force-push) to get there.
 
 ## When to ask the user
 
@@ -159,7 +128,7 @@ changelog (https://github.blog/changelog/) for the cause, and say what you found
 - Worktrees don't isolate ports or databases. Confirm a port answers your
   process; no schema experiments on a shared database.
 - Regenerate lockfiles on conflict; never hand-merge them.
-- Merge only as the Merging rules allow. Keep the worktree until it is merged or closed.
+- Merge only as the Merge policy allows. Keep the worktree until it is merged or closed.
 
 ## Periodic: untangle the codebase
 
@@ -176,7 +145,8 @@ and ask before it removes comments or tests.
 - For UI changes, `/design-review` screenshots are in the PR.
 - The review gate passed, or you report the real result and what is open.
   Never claim success you didn't get.
-- The PR is merged under the Merging rules, or handed to the user with its URL.
+- The PR is auto-merged under the Merge policy, or parked and handed to the user
+  with its URL.
 
 ## Conventions
 
