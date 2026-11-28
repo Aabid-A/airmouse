@@ -91,11 +91,12 @@ class Part:
     """One simple command: its words, here-docs, and how it joins its neighbours."""
 
     def __init__(self, words: list[str], before: str, after: str, heredocs: list[int],
-                 redirects_out: bool) -> None:
+                 herestrings: list[str], redirects_out: bool) -> None:
         self.words = words
         self.before = before
         self.after = after
         self.heredocs = heredocs
+        self.herestrings = herestrings  # the words after `<<<`
         self.redirects_out = redirects_out
 
     @property
@@ -318,6 +319,7 @@ def split_parts(tokens: list[tuple[str, bool]]) -> tuple[list[Part], bool]:
     grouped = False
     words: list[str] = []
     heredocs: list[int] = []
+    herestrings: list[str] = []
     redirects_out = False
     before = ""
     redirect = ""  # a redirect operator waiting for its word
@@ -326,6 +328,8 @@ def split_parts(tokens: list[tuple[str, bool]]) -> tuple[list[Part], bool]:
             match = HEREDOC_WORD.fullmatch(text)
             if redirect in ("<<", "<<-") and match:
                 heredocs.append(int(match.group(1)))
+            elif redirect == "<<<":
+                herestrings.append(text)
             redirect = ""
             continue
         redirect = ""
@@ -336,10 +340,10 @@ def split_parts(tokens: list[tuple[str, bool]]) -> tuple[list[Part], bool]:
             redirects_out = redirects_out or text in OUT_REDIRECTS
         else:  # a separator, a pipe, a background & or a parenthesis
             grouped = grouped or text in ("(", ")")
-            parts.append(Part(words, before, text, heredocs, redirects_out))
-            words, heredocs, redirects_out, before = [], [], False, text
-    parts.append(Part(words, before, "", heredocs, redirects_out))
-    return [p for p in parts if p.words or p.heredocs], grouped
+            parts.append(Part(words, before, text, heredocs, herestrings, redirects_out))
+            words, heredocs, herestrings, redirects_out, before = [], [], [], False, text
+    parts.append(Part(words, before, "", heredocs, herestrings, redirects_out))
+    return [p for p in parts if p.words or p.heredocs or p.herestrings], grouped
 
 
 def command_words(words: list[str]) -> tuple[list[str], list[str]]:
@@ -543,17 +547,21 @@ def check_commits(cmd: str, session_cwd: str, depth: int = 0, inside: bool = Fal
             if target is not None:
                 commit_in(target)
         else:
-            # Text this command may run as code: here-doc bodies (unless `cat`
-            # just prints them) and the output of substitutions in its words.
+            # Text this command may run as code: its words, its here-doc and
+            # here-string bodies (unless `cat` just prints them), and the output
+            # of substitutions in any of those.
             prints = name == "cat" and not part.redirects_out and not part.piped_onward
-            code = [] if prints else [docs[i].body for i in part.heredocs]
-            code += [substs[int(n)] for w in part.words for n in SUBST_WORD.findall(w)]
-            if COMMIT_MENTION.search(" ".join(part.words)) or any(
-                COMMIT_MENTION.search(unquoted(text)) for text in code
-            ):
-                if name in COMMAND_RUNNERS or (part.heredocs and part.piped_onward):
-                    raise Blocked(f"a git commit run through `{name or '<<'}`. "
+            fed = [] if prints else [docs[i].body for i in part.heredocs] + part.herestrings
+            code = [" ".join(part.words), *fed]
+            code += [substs[int(n)] for text in code for n in SUBST_WORD.findall(text)]
+            stdin_is_code = bool(part.heredocs or part.herestrings) and part.piped_onward
+            if name in COMMAND_RUNNERS or stdin_is_code:
+                # A shell or runner: block on any sign of a commit, without parsing
+                # (`git \` + newline + `commit`, `c=commit; git $c` included).
+                if any(needs_check(text) for text in code):
+                    raise Blocked(f"a git commit may run through `{name or '<<'}`. "
                                   "Run `cd <worktree> && git commit ...` directly.")
+            elif any(COMMIT_MENTION.search(unquoted(text.replace("\\\n", ""))) for text in code):
                 commit_in(cwd)  # another program mentions git commit: judge as before
             elif has_expansion(name) and "commit" in words:
                 raise Blocked(f"the command name is an expansion ({name}) next to `commit`.")
@@ -591,9 +599,9 @@ def main() -> int:
         print(f"BLOCKED by git-guardrails: {e}\nCommand: {cmd.strip()}", file=sys.stderr)
         return 2
     except Exception as e:  # never fail open on a commit (exit 1 would let it run)
-        if mentions_commit(cmd):
+        if needs_check(cmd):
             print(f"BLOCKED by git-guardrails: the hook could not analyse this command "
-                  f"({type(e).__name__}), and it says commit.\nCommand: {cmd.strip()}",
+                  f"({type(e).__name__}), and it may hold a commit.\nCommand: {cmd.strip()}",
                   file=sys.stderr)
             return 2
     return 0

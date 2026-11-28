@@ -479,7 +479,8 @@ def test_unexpected_error_blocks_a_commit_but_not_other_commands(
 
     monkeypatch.setattr(hook, "tokenize", broken)
     assert check(repo, monkeypatch, f"cd {repo.worktree} && git commit -m x") == BLOCK
-    assert check(repo, monkeypatch, "git log $REF") == ALLOW
+    assert check(repo, monkeypatch, "git log $REF") == BLOCK  # `git $x` may be a commit
+    assert check(repo, monkeypatch, "git log --oneline") == ALLOW
 
 
 # Cases found by mutation testing.
@@ -575,3 +576,70 @@ def test_wrappers_and_split_words(
 def test_worker_commit_forms_are_allowed(repo: Repo, monkeypatch: pytest.MonkeyPatch, command: str):
     command = command.format(wt=repo.worktree)
     assert check(repo, monkeypatch, command) == ALLOW
+
+
+# Text fed to a shell (here-string, here-doc, -c) blocks on any sign of a commit.
+
+SHELL_FED = [
+    "sh <<< 'git commit -m x'",
+    'bash <<< "git commit -m x"',
+    'bash <<<"git commit -m x"',
+    "sh <<< $'git commit -m x'",
+    "sh 0<<< 'git commit -m x'",
+    "sh <<< 'cd ../main && git commit -m x'",
+    "sh <<< \"$(cat <<'EOF'\ngit commit -m x\nEOF\n)\"",
+    "bash <<'EOF'\ngit \\\ncommit -m x\nEOF",
+    "bash <<'EOF'\nc=commit\ngit $c -m x\nEOF",
+    "bash <<'EOF'\nc=comm\ngit ${c}it -m x\nEOF",
+    "bash -c 'c=commit; git $c -m x'",
+    "cat <<< 'git commit -m x' | sh",
+]
+
+
+@pytest.mark.parametrize("command", SHELL_FED)
+@pytest.mark.parametrize("session", ["main", "wt"])
+def test_text_fed_to_a_shell_blocks(
+    repo: Repo, monkeypatch: pytest.MonkeyPatch, command: str, session: str
+):
+    where = repo.main if session == "main" else repo.worktree
+    assert check(repo, monkeypatch, command, where) == BLOCK
+
+
+@pytest.mark.parametrize(
+    ("command", "session", "expected"),
+    [
+        ("cd {wt} && git commit -F - <<< 'msg'", "main", ALLOW),  # git reads it as data
+        ("git commit -F - <<< 'msg'", "main", BLOCK),
+        ("cat <<< 'git commit text'", "main", ALLOW),  # cat only prints it
+        ("python3 <<< \"import os; os.system('git commit -m y')\"", "main", BLOCK),
+        ("python3 <<< \"import os; os.system('git commit -m y')\"", "wt", ALLOW),
+    ],
+)
+def test_here_strings_to_data_readers(
+    repo: Repo, monkeypatch: pytest.MonkeyPatch, command: str, session: str, expected: int
+):
+    command = command.format(wt=repo.worktree)
+    where = repo.main if session == "main" else repo.worktree
+    assert check(repo, monkeypatch, command, where) == expected
+
+
+def test_git_subcommand_built_from_a_variable_blocks(repo: Repo, monkeypatch: pytest.MonkeyPatch):
+    assert check(repo, monkeypatch, "c=comm; git ${c}it -m x") == BLOCK
+
+
+@pytest.mark.parametrize(
+    ("command", "expected"),
+    [
+        ("cd {wt} | true; git commit -m x", BLOCK),  # the cd ran in a subshell
+        ("cd {wt} & git commit -m x", BLOCK),
+        ("cd {wt} && git commit -m x | tee /dev/null", ALLOW),
+    ],
+)
+def test_cd_in_a_pipeline_or_background_does_not_move_the_shell(
+    repo: Repo, monkeypatch: pytest.MonkeyPatch, command: str, expected: int
+):
+    assert check(repo, monkeypatch, command.format(wt=repo.worktree)) == expected
+
+
+def test_error_fallback_uses_the_same_filter(repo: Repo, monkeypatch: pytest.MonkeyPatch):
+    assert check(repo, monkeypatch, "c=comm; git -C '/a\x00' ${c}it -m x") == BLOCK
