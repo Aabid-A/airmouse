@@ -28,6 +28,9 @@ If the environment already gave this task a worktree, keep it and skip to step 5
    ```
 5. **Enter and verify:** `cd` into it; `git branch --show-current` must print the
    new branch, not `main`. Install dependencies inside the worktree if needed.
+   If the shell can't stay in the worktree, start the session there (Agent
+   tool `isolation: "worktree"`, or `EnterWorktree`), or run git as one command,
+   `cd <worktree> && git commit ...`, so the guardrail hook sees the target.
 
 ## Remember
 

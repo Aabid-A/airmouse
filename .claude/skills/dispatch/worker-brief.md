@@ -28,6 +28,9 @@ Part of spec #<s>: <the 3–10 spec lines that matter for this issue, or "none">
 ## How to work
 Follow AGENTS.md. Skills, in order: <from the dispatch table>.
 Branch: agent/<n>-<slug> in its own worktree, from origin/main.
+Commits: start with the worktree as your working directory (Agent tool
+`isolation: "worktree"`, or `EnterWorktree`), or run `cd <worktree> && git ...`
+as one command, so the guardrail hook sees where it runs.
 Checks: scripts/check.sh must pass. Evidence goes in the PR (pr skill).
 
 ## Stop when
