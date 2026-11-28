@@ -9,11 +9,13 @@ import importlib.util
 import io
 import json
 import os
+import shutil
 import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
 from types import ModuleType
+from typing import Any
 
 import pytest
 
@@ -53,23 +55,27 @@ def git(cwd: Path, *args: str) -> None:
     subprocess.run(["git", *args], cwd=cwd, env=env, check=True, capture_output=True)
 
 
+def make_repo(root: Path, branch: str) -> Repo:
+    main = root / "main"
+    (main / "src").mkdir(parents=True)
+    git(main, "init", "-q", "-b", branch)
+    (main / "src" / "file.txt").write_text("hello\n")
+    git(main, "add", "src/file.txt")
+    git(main, "commit", "-q", "-m", "first")
+    worktree = root / "wt"
+    git(main, "worktree", "add", "-q", "-b", "agent/task", str(worktree))
+    plain = root / "plain"
+    plain.mkdir()
+    return Repo(main=main, worktree=worktree, plain=plain)
+
+
 @pytest.fixture
 def repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Repo:
     for name in ("GIT_DIR", "GIT_WORK_TREE", "CDPATH"):
         monkeypatch.delenv(name, raising=False)
     for name, value in GIT_ENV.items():
         monkeypatch.setenv(name, value)
-    main = tmp_path / "main"
-    main.mkdir()
-    git(main, "init", "-q", "-b", "main")
-    (main / "file.txt").write_text("hello\n")
-    git(main, "add", "file.txt")
-    git(main, "commit", "-q", "-m", "first")
-    worktree = tmp_path / "wt"
-    git(main, "worktree", "add", "-q", "-b", "agent/task", str(worktree))
-    plain = tmp_path / "plain"
-    plain.mkdir()
-    return Repo(main=main, worktree=worktree, plain=plain)
+    return make_repo(tmp_path, "main")
 
 
 def hook_input(command: str, cwd: Path) -> str:
@@ -396,3 +402,176 @@ def test_non_bash_tools_and_bad_input(repo: Repo):
     assert run_subprocess(other).returncode == ALLOW
     assert run_subprocess("not json").returncode == ALLOW
     assert run_subprocess("not json: git commit -m x").returncode == BLOCK
+
+
+# Here-strings and here-docs: a body is data only for git or a printing `cat`.
+
+
+@pytest.mark.parametrize(
+    ("command", "session", "expected"),
+    [
+        ("cat <<< x\ngit commit -m y\nx", "main", BLOCK),
+        ("cat <<<x\ngit commit -m y\nx", "main", BLOCK),
+        ("cd {wt} && git commit -F - <<< 'msg'", "main", ALLOW),
+        ("cd {wt} && git commit -F - <<-EOF\n\tmsg\n\tEOF", "main", ALLOW),
+        ("git commit -F - <<-EOF\n\tmsg\n\tEOF", "main", BLOCK),
+        ('cd {wt} && git commit -F - <<"EOF"\nmsg\nEOF', "main", ALLOW),
+        ("cat <<A; cat <<B\na\nA\nb\nB\ngit commit -m x", "main", BLOCK),
+        ("cat <<A; cat <<B\na\nA\nb\nB\ngit commit -m x", "wt", ALLOW),
+        ("cat <<EOF\ngit commit -m x", "wt", BLOCK),
+        ("bash <<'EOF'\ngit commit -m x\nEOF", "main", BLOCK),
+        ("sh <<EOF\ngit commit -m x\nEOF", "main", BLOCK),
+        ("bash <<'EOF'\ngit -C {main} commit -m x\nEOF", "wt", BLOCK),
+        ("python3 <<'EOF'\nimport os; os.system('git commit -m y')\nEOF", "main", BLOCK),
+        ("python3 <<'EOF'\nimport os; os.system('git commit -m y')\nEOF", "wt", ALLOW),
+        ("cat <<'EOF' | bash\ngit commit -m x\nEOF", "wt", BLOCK),
+        ("cat <<'EOF'\ngit commit -m x\nEOF", "main", ALLOW),
+        ("eval \"$(cat <<'EOF'\ngit commit -m x\nEOF\n)\"", "wt", BLOCK),
+        ("cat <<EOF\n$(git -C {main} commit -am x)\nEOF", "wt", BLOCK),
+        ("gh pr create --body \"$(cat <<'EOF'\nRun git commit here\nEOF\n)\"", "wt", ALLOW),
+        ("gh pr create --body \"$(cat <<'EOF'\nRun git commit here\nEOF\n)\"", "main", BLOCK),
+    ],
+)
+def test_here_docs_and_here_strings(
+    repo: Repo, monkeypatch: pytest.MonkeyPatch, command: str, session: str, expected: int
+):
+    command = command.format(wt=repo.worktree, main=repo.main)
+    where = repo.main if session == "main" else repo.worktree
+    assert check(repo, monkeypatch, command, where) == expected
+
+
+def test_commit_message_that_reads_like_commands_is_data(
+    repo: Repo, monkeypatch: pytest.MonkeyPatch
+):
+    message = "Don't block worktrees\n\ncd ../main; git commit -am oops\n"
+    for form in (
+        f"git commit -m \"$(cat <<'EOF'\n{message}EOF\n)\"",
+        f"git commit -F - <<'EOF'\n{message}EOF",
+    ):
+        assert check(repo, monkeypatch, f"cd {repo.worktree} && {form}") == ALLOW
+        assert check(repo, monkeypatch, form) == BLOCK
+
+
+# The hook never fails open on a command that says commit.
+
+
+def test_deep_nesting_blocks_instead_of_crashing(repo: Repo, monkeypatch: pytest.MonkeyPatch):
+    command = "echo " + "$(" * 1000 + "git commit -am x" + ")" * 1000
+    assert check(repo, monkeypatch, command, repo.worktree) == BLOCK
+    result = run_subprocess(hook_input(command, repo.main))
+    assert result.returncode == BLOCK
+    assert "nested too deeply" in result.stderr
+
+
+def test_nul_byte_in_a_path_or_the_cwd_blocks(repo: Repo, monkeypatch: pytest.MonkeyPatch):
+    assert check(repo, monkeypatch, "cd /tmp/a\x00b && git commit -m x") == BLOCK
+    assert check(repo, monkeypatch, "git -C /tmp/a\x00b commit -m x") == BLOCK
+    stdin = json.dumps({"tool_input": {"command": "git commit -m x"}, "cwd": "/tmp/a\x00b"})
+    monkeypatch.setattr(sys, "stdin", io.StringIO(stdin))
+    assert hook.main() == BLOCK
+
+
+def test_unexpected_error_blocks_a_commit_but_not_other_commands(
+    repo: Repo, monkeypatch: pytest.MonkeyPatch
+):
+    def broken(cmd: str) -> list[tuple[str, bool]]:
+        raise RuntimeError("parser bug")
+
+    monkeypatch.setattr(hook, "tokenize", broken)
+    assert check(repo, monkeypatch, f"cd {repo.worktree} && git commit -m x") == BLOCK
+    assert check(repo, monkeypatch, "git log $REF") == ALLOW
+
+
+# Cases found by mutation testing.
+
+
+def test_master_is_protected_like_main(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    for name, value in GIT_ENV.items():
+        monkeypatch.setenv(name, value)
+    monkeypatch.delenv("GIT_DIR", raising=False)
+    master = make_repo(tmp_path, "master")
+    assert run_in_process("git commit -m x", master.main, monkeypatch) == BLOCK
+    assert run_in_process("git commit -m x", master.worktree, monkeypatch) == ALLOW
+
+
+def test_dot_dot_after_a_symlink_into_main_is_blocked(repo: Repo, monkeypatch: pytest.MonkeyPatch):
+    (repo.worktree / "link").symlink_to(repo.main / "src")
+    assert check(repo, monkeypatch, f"git -C {repo.worktree}/link/.. commit -m x") == BLOCK
+    assert check(repo, monkeypatch, f"cd {repo.worktree}/link/.. && git commit -m x") == BLOCK
+    assert check(repo, monkeypatch, "git -C link/.. commit -m x", repo.worktree) == BLOCK
+    assert check(repo, monkeypatch, "cd link/.. && git commit -m x", repo.worktree) == BLOCK
+
+
+def test_variable_path_is_unresolvable_even_if_it_exists_literally(
+    repo: Repo, monkeypatch: pytest.MonkeyPatch
+):
+    (repo.worktree / "$X").mkdir()  # read literally, `$X/..` would be the worktree
+    monkeypatch.setenv("X", str(repo.main / "src"))
+    assert check(repo, monkeypatch, "cd $X/.. && git commit -m x", repo.worktree) == BLOCK
+
+
+def test_unreadable_branch_blocks(repo: Repo, monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+    real_git = shutil.which("git")
+    fake = tmp_path / "bin" / "git"
+    fake.parent.mkdir()
+    fake.write_text(f'#!/bin/sh\n[ "$1" = branch ] && exit 1\nexec {real_git} "$@"\n')
+    fake.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{fake.parent}{os.pathsep}{os.environ['PATH']}")
+    assert check(repo, monkeypatch, "git commit -m x", repo.worktree) == BLOCK
+
+
+def test_branch_timeout_blocks(repo: Repo, monkeypatch: pytest.MonkeyPatch):
+    real_run = subprocess.run
+
+    def slow_branch(args: list[str], **kwargs: Any) -> Any:
+        if "branch" in args:
+            raise subprocess.TimeoutExpired(args, 5)
+        return real_run(args, **kwargs)
+
+    monkeypatch.setattr(hook.subprocess, "run", slow_branch)
+    assert check(repo, monkeypatch, "git commit -m x", repo.worktree) == BLOCK
+
+
+# Wrappers, `command` options, traps and split words.
+
+
+@pytest.mark.parametrize(
+    ("command", "expected"),
+    [
+        ("setsid git commit -m x", BLOCK),
+        ("uv run git commit -m x", BLOCK),
+        ("flock /tmp/guardrail.lock git commit -m x", BLOCK),
+        ("command -p git -C {main} commit -m x", BLOCK),
+        ("command -- cd {main} && git commit -m x", BLOCK),
+        ("command -p git -C {wt} commit -m x", ALLOW),
+        ("trap 'git -C {main} commit -am x' EXIT; git status", BLOCK),
+        ("git -C {main} commi''t -m x", BLOCK),
+        ("git -C {main} c\\ommit -m x", BLOCK),
+        ('git -C {main} "comm"it -m x', BLOCK),
+        ("git -C {wt} commi''t -m x", ALLOW),
+        ("c=commit; git $c -m x", BLOCK),
+    ],
+)
+def test_wrappers_and_split_words(
+    repo: Repo, monkeypatch: pytest.MonkeyPatch, command: str, expected: int
+):
+    command = command.format(wt=repo.worktree, main=repo.main)
+    assert check(repo, monkeypatch, command, repo.worktree) == expected
+
+
+# Plausible worker commits stay allowed.
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "cd {wt} && git add -A && git commit -m x",
+        "git -C {wt} add . && git -C {wt} commit -m x",
+        "cd {wt} && git commit -m x 2>&1 | tail -3",
+        "cd {wt} && git commit -m x || true",
+        "cd {wt} && git commit -m x; echo done",
+    ],
+)
+def test_worker_commit_forms_are_allowed(repo: Repo, monkeypatch: pytest.MonkeyPatch, command: str):
+    command = command.format(wt=repo.worktree)
+    assert check(repo, monkeypatch, command) == ALLOW

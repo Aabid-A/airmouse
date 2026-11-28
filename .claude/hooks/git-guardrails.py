@@ -8,7 +8,8 @@ and AGENTS.md. Idea from Matt Pocock's git-guardrails-claude-code skill (MIT).
 A `git commit` is judged in the directory it will run in: the session cwd, as
 changed by `cd` parts earlier in the same command and by `git -C`. It is
 blocked when that directory is on main or master, and also when the directory
-cannot be worked out from the command text alone (fail closed).
+cannot be worked out from the command text alone (fail closed). This guards
+against agent mistakes; it is not a security boundary against a hostile agent.
 """
 
 from __future__ import annotations  # runs on the system python3, which may be old
@@ -33,18 +34,23 @@ RULES = [
 
 PROTECTED_BRANCHES = ("main", "master")
 COMMIT_MENTION = re.compile(r"\bgit\b.*\bcommit(\s|$)")
-SUBST = "$__guardrail_subst__"  # stands in for a $(...) or `...` span
+MAX_DEPTH = 20  # nested $(...) levels the hook will follow
+SUBST_WORD = re.compile(r"\$__guardrail_subst_(\d+)__")
+HEREDOC_WORD = re.compile(r"__guardrail_heredoc_(\d+)__")
 
-# Shell control flow, and commands that run another command. A git commit
-# behind one of these cannot be judged statically.
-SHELL_KEYWORDS = {
+# Shell control flow, aliases and traps can hide or reorder a commit, so a
+# command that says commit and uses one of them is blocked.
+CONTROL_WORDS = {
     "if", "then", "else", "elif", "fi", "do", "done", "while", "until", "for",
     "case", "esac", "select", "function", "!", "{", "}", "[[", "]]", "coproc",
+    "alias", "trap",
 }
+# Commands that run another command. A git commit behind one is blocked.
 COMMAND_RUNNERS = {
     "bash", "sh", "zsh", "dash", "ksh", "mksh", "fish", "eval", "exec", "env",
     "sudo", "doas", "su", "xargs", "nice", "nohup", "time", "timeout", "stdbuf",
-    "watch", "parallel", "find", "source", ".",
+    "watch", "parallel", "find", "source", ".", "setsid", "ionice", "flock", "script",
+    "chronic", "strace", "taskset", "unbuffer", "uv",
 }
 # Commands that may change the shell's directory in ways the hook can't follow.
 DIR_CHANGERS = {"pushd", "popd", "eval", "source", "."}
@@ -61,6 +67,7 @@ GIT_FLAG_PREFIXES = (
 )
 OPERATOR = re.compile(r"&&|\|\||;;|\|&|&>>|&>|>>|<<<|<<-|<<|>&|<&|>\||[;&|()<>\n]")
 REDIRECTS = {">", ">>", "<", "<<", "<<-", "<<<", ">&", "<&", "&>", "&>>", ">|"}
+OUT_REDIRECTS = {">", ">>", ">&", "&>", "&>>", ">|"}
 
 
 class Blocked(Exception):
@@ -74,27 +81,97 @@ class Unknown:
         self.why = why
 
 
-class Part:
-    """One simple command: its words and how it is joined to its neighbours."""
+class HereDoc:
+    def __init__(self, body: str, quoted: bool) -> None:
+        self.body = body
+        self.quoted = quoted  # a quoted delimiter means no expansion in the body
 
-    def __init__(self, words: list[str], before: str, after: str) -> None:
+
+class Part:
+    """One simple command: its words, here-docs, and how it joins its neighbours."""
+
+    def __init__(self, words: list[str], before: str, after: str, heredocs: list[int],
+                 redirects_out: bool) -> None:
         self.words = words
         self.before = before
         self.after = after
+        self.heredocs = heredocs
+        self.redirects_out = redirects_out
+
+    @property
+    def piped_onward(self) -> bool:
+        return self.after in ("|", "|&")
 
     @property
     def in_pipeline_or_background(self) -> bool:
         return self.before in ("|", "|&") or self.after in ("|", "|&", "&")
 
 
+def unquoted(text: str) -> str:
+    """The text without quote and backslash characters, so `commi''t` reads `commit`."""
+    return re.sub(r"[\\'\"]", "", text)
+
+
+def mentions_commit(cmd: str) -> bool:
+    return bool(re.search(r"\bcommit\b", unquoted(cmd)))
+
+
+def needs_check(cmd: str) -> bool:
+    """Only these commands can hold a git commit (`git $c` counts: c may be commit)."""
+    return mentions_commit(cmd) or ("$" in cmd and bool(re.search(r"\bgit\b", unquoted(cmd))))
+
+
 # --- Text pre-pass: comments, here-documents and command substitutions ------
+
+
+def _read_heredoc_word(s: str, i: int) -> tuple[str, bool, bool, int]:
+    """Parse the delimiter after `<<`: (word, strip_tabs, quoted, end index)."""
+    strip_tabs = s.startswith("-", i)
+    if strip_tabs:
+        i += 1
+    while i < len(s) and s[i] in " \t":
+        i += 1
+    word: list[str] = []
+    quoted = False
+    while i < len(s) and s[i] not in " \t\n;&|()<>":
+        c = s[i]
+        if c in "'\"":
+            end = s.find(c, i + 1)
+            if end < 0:
+                raise Blocked("unbalanced quotes in a here-document delimiter.")
+            word.append(s[i + 1:end])
+            quoted = True
+            i = end + 1
+        elif c == "\\" and i + 1 < len(s):
+            word.append(s[i + 1])
+            quoted = True
+            i += 2
+        else:
+            word.append(c)
+            i += 1
+    if not word:
+        raise Blocked("a here-document with no delimiter.")
+    return "".join(word), strip_tabs, quoted, i
+
+
+def _read_heredoc_body(s: str, i: int, word: str, strip_tabs: bool) -> tuple[str, int]:
+    """From the start of a body line: (body, index of the line after the delimiter)."""
+    start = i
+    while True:
+        end = s.find("\n", i)
+        line = s[i:] if end < 0 else s[i:end]
+        if (line.lstrip("\t") if strip_tabs else line) == word:
+            return s[start:i], len(s) if end < 0 else end + 1
+        if end < 0:
+            raise Blocked(f"a here-document with no closing {word!r} line.")
+        i = end + 1
 
 
 def _find_subst_end(s: str, i: int) -> int:
     """Index just past the `)` closing the `$(` that ends at s[i-1]."""
     depth = 1
     quote = ""
-    heredocs: list[tuple[str, bool]] = []
+    pending: list[tuple[str, bool]] = []
     while i < len(s):
         c = s[i]
         if quote == "'":
@@ -107,15 +184,18 @@ def _find_subst_end(s: str, i: int) -> int:
                 quote = ""
         elif c in "'\"":
             quote = c
-        elif s.startswith("<<", i) and not s.startswith("<<<", i):
-            word, strip_tabs, i = _read_heredoc_word(s, i + 2)
-            heredocs.append((word, strip_tabs))
+        elif s.startswith("<<<", i):
+            i += 3
             continue
-        elif c == "\n" and heredocs:
+        elif s.startswith("<<", i):
+            word, strip_tabs, _, i = _read_heredoc_word(s, i + 2)
+            pending.append((word, strip_tabs))
+            continue
+        elif c == "\n" and pending:
             i += 1
-            for word, strip_tabs in heredocs:
-                i = _skip_heredoc(s, i, word, strip_tabs)
-            heredocs = []
+            for word, strip_tabs in pending:
+                _, i = _read_heredoc_body(s, i, word, strip_tabs)
+            pending = []
             continue
         elif c == "(":
             depth += 1
@@ -127,55 +207,17 @@ def _find_subst_end(s: str, i: int) -> int:
     raise Blocked("unbalanced $( in the command.")
 
 
-def _read_heredoc_word(s: str, i: int) -> tuple[str, bool, int]:
-    """Parse the delimiter after `<<`. Returns (word, strip_tabs, end index)."""
-    strip_tabs = s.startswith("-", i)
-    if strip_tabs:
-        i += 1
-    while i < len(s) and s[i] in " \t":
-        i += 1
-    word = []
-    while i < len(s) and s[i] not in " \t\n;&|()<>":
-        c = s[i]
-        if c in "'\"":
-            end = s.find(c, i + 1)
-            if end < 0:
-                raise Blocked("unbalanced quotes in a here-document delimiter.")
-            word.append(s[i + 1:end])
-            i = end + 1
-        elif c == "\\" and i + 1 < len(s):
-            word.append(s[i + 1])
-            i += 2
-        else:
-            word.append(c)
-            i += 1
-    if not word:
-        raise Blocked("a here-document with no delimiter.")
-    return "".join(word), strip_tabs, i
+def preprocess(cmd: str) -> tuple[str, list[str], list[HereDoc]]:
+    """Drop comments; cut out command substitutions and here-document bodies.
 
-
-def _skip_heredoc(s: str, i: int, word: str, strip_tabs: bool) -> int:
-    """From the start of a body line, index of the line after the delimiter line."""
-    while i <= len(s):
-        end = s.find("\n", i)
-        line = s[i:] if end < 0 else s[i:end]
-        if (line.lstrip("\t") if strip_tabs else line) == word:
-            return len(s) if end < 0 else end + 1
-        if end < 0:
-            break
-        i = end + 1
-    raise Blocked(f"a here-document with no closing {word!r} line.")
-
-
-def preprocess(cmd: str) -> tuple[str, list[str]]:
-    """Drop comments and here-document bodies; cut out command substitutions.
-
-    Returns the cleaned command, with each substitution replaced by SUBST, and
-    the bodies of the substitutions.
+    Returns the cleaned command, where each substitution is a `$__guardrail_subst_N__`
+    word and each here-doc delimiter a `__guardrail_heredoc_N__` word, plus the
+    substitution bodies and the here-docs.
     """
     out: list[str] = []
-    bodies: list[str] = []
-    heredocs: list[tuple[str, bool]] = []
+    substs: list[str] = []
+    docs: list[HereDoc] = []
+    pending: list[tuple[str, bool, bool]] = []
     quote = ""
     i = 0
     while i < len(cmd):
@@ -197,14 +239,14 @@ def preprocess(cmd: str) -> tuple[str, list[str]]:
                 end = cmd.find("`", end + 1)
             if end < 0:
                 raise Blocked("unbalanced backtick in the command.")
-            bodies.append(cmd[i + 1:end])
-            out.append(SUBST)
+            out.append(f"$__guardrail_subst_{len(substs)}__")
+            substs.append(cmd[i + 1:end])
             i = end + 1
             continue
         if cmd.startswith("$(", i):
             end = _find_subst_end(cmd, i + 2)
-            bodies.append(cmd[i + 2:end - 1])
-            out.append(SUBST)
+            out.append(f"$__guardrail_subst_{len(substs)}__")
+            substs.append(cmd[i + 2:end - 1])
             i = end
             continue
         if quote == '"':
@@ -222,26 +264,30 @@ def preprocess(cmd: str) -> tuple[str, list[str]]:
             end = cmd.find("\n", i)
             i = len(cmd) if end < 0 else end
             continue
-        if cmd.startswith("<<", i) and not cmd.startswith("<<<", i):
-            word, strip_tabs, end = _read_heredoc_word(cmd, i + 2)
-            heredocs.append((word, strip_tabs))
-            out.append("<< " + shlex.quote(word))
-            i = end
+        if cmd.startswith("<<<", i):  # a here-string: its word is an ordinary word
+            out.append("<<<")
+            i += 3
             continue
-        if c == "\n" and heredocs:
+        if cmd.startswith("<<", i):
+            word, strip_tabs, quoted, i = _read_heredoc_word(cmd, i + 2)
+            out.append(f"<< __guardrail_heredoc_{len(docs) + len(pending)}__")
+            pending.append((word, strip_tabs, quoted))
+            continue
+        if c == "\n" and pending:
             out.append(c)
             i += 1
-            for word, strip_tabs in heredocs:
-                i = _skip_heredoc(cmd, i, word, strip_tabs)
-            heredocs = []
+            for word, strip_tabs, quoted in pending:
+                body, i = _read_heredoc_body(cmd, i, word, strip_tabs)
+                docs.append(HereDoc(body, quoted))
+            pending = []
             continue
         out.append(c)
         i += 1
     if quote:
         raise Blocked("unbalanced quotes in the command.")
-    if heredocs:
+    if pending:
         raise Blocked("a here-document with no body.")
-    return "".join(out), bodies
+    return "".join(out), substs, docs
 
 
 # --- Splitting into simple commands ------------------------------------------
@@ -271,30 +317,33 @@ def split_parts(tokens: list[tuple[str, bool]]) -> tuple[list[Part], bool]:
     parts: list[Part] = []
     grouped = False
     words: list[str] = []
+    heredocs: list[int] = []
+    redirects_out = False
     before = ""
-    skip_next = False
+    redirect = ""  # a redirect operator waiting for its word
     for text, is_op in tokens:
-        if skip_next and not is_op:
-            skip_next = False
+        if redirect and not is_op:
+            match = HEREDOC_WORD.fullmatch(text)
+            if redirect in ("<<", "<<-") and match:
+                heredocs.append(int(match.group(1)))
+            redirect = ""
             continue
-        skip_next = False
+        redirect = ""
         if not is_op:
             words.append(text)
         elif text in REDIRECTS:
-            skip_next = True
-        elif text in ("(", ")"):
-            grouped = True
-            parts.append(Part(words, before, text))
-            words, before = [], text
-        else:  # a separator, a pipe or a background &
-            parts.append(Part(words, before, text))
-            words, before = [], text
-    parts.append(Part(words, before, ""))
-    return [p for p in parts if p.words], grouped
+            redirect = text
+            redirects_out = redirects_out or text in OUT_REDIRECTS
+        else:  # a separator, a pipe, a background & or a parenthesis
+            grouped = grouped or text in ("(", ")")
+            parts.append(Part(words, before, text, heredocs, redirects_out))
+            words, heredocs, redirects_out, before = [], [], False, text
+    parts.append(Part(words, before, "", heredocs, redirects_out))
+    return [p for p in parts if p.words or p.heredocs], grouped
 
 
 def command_words(words: list[str]) -> tuple[list[str], list[str]]:
-    """Split leading VAR=value assignments off; drop `command`/`builtin`."""
+    """Split leading VAR=value assignments off; drop `command`/`builtin` and their options."""
     i = 0
     while i < len(words) and re.match(r"[A-Za-z_][A-Za-z0-9_]*=", words[i]):
         i += 1
@@ -302,6 +351,8 @@ def command_words(words: list[str]) -> tuple[list[str], list[str]]:
     rest = words[i:]
     while rest and rest[0] in ("command", "builtin"):
         rest = rest[1:]
+        while rest and rest[0].startswith("-"):
+            rest = rest[1:]
     return assigns, rest
 
 
@@ -357,7 +408,15 @@ def apply_cd(args: list[str], cwd: str | Unknown) -> str | Unknown:
     ):
         return Unknown("a relative `cd` while CDPATH is set")
     joined = os.path.join(cwd, path)
-    return os.path.realpath(joined) if physical else os.path.normpath(joined)
+    real = os.path.realpath(joined)
+    if physical:
+        return real
+    # Bash's logical cd drops `..` by text; the filesystem follows symlinks first.
+    # When they disagree (`..` after a symlink), don't guess.
+    logical = os.path.normpath(joined)
+    if os.path.realpath(logical) != real:
+        return Unknown(f"`..` after a symlink in {path}")
+    return logical
 
 
 def git_commit_target(
@@ -379,7 +438,7 @@ def git_commit_target(
                 target = Unknown(f"`git -C` with {why}")
             elif os.path.isabs(path):
                 target = os.path.realpath(path)
-            elif not isinstance(target, Unknown) and path:
+            elif not isinstance(target, Unknown):
                 target = os.path.realpath(os.path.join(target, path))
             i += 2
         elif a in ("--git-dir", "--work-tree", "--bare") or a.startswith(
@@ -405,7 +464,7 @@ def run_git(cwd: str, *args: str) -> str | None:
     try:
         out = subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True,
                              timeout=5)
-    except Exception:
+    except (OSError, subprocess.SubprocessError):
         return None
     return out.stdout.strip() if out.returncode == 0 else None
 
@@ -431,68 +490,47 @@ def judge(cwd: str | Unknown) -> None:
 # --- The commit check --------------------------------------------------------
 
 
-def mentions_commit(cmd: str) -> bool:
-    """Cheap filter: only a command with the word `commit` can hold a git commit."""
-    return bool(re.search(r"\bcommit\b", cmd))
+def check_commits(cmd: str, session_cwd: str, depth: int = 0, inside: bool = False) -> None:
+    """Raise Blocked if a git commit in `cmd` targets main or can't be judged.
 
-
-def contains_commit(cmd: str) -> bool:
-    """Whether a command (e.g. a substitution body) has a git commit in it."""
-    if not mentions_commit(cmd):
-        return False
-    try:
-        cleaned, bodies = preprocess(cmd)
-        parts, _ = split_parts(tokenize(cleaned))
-    except Blocked:
-        return True
-    for part in parts:
-        _, words = command_words(part.words)
-        if COMMIT_MENTION.search(" ".join(part.words)) or (
-            words and has_expansion(words[0]) and "commit" in words
-        ):
-            return True
-    return any(contains_commit(b) for b in bodies)
-
-
-def check_commits(cmd: str, session_cwd: str) -> None:
-    """Raise Blocked if any git commit in `cmd` targets main or can't be judged."""
-    if not mentions_commit(cmd):
+    `inside` is set for the body of a $(...) or `...`: any commit there blocks.
+    """
+    if depth > MAX_DEPTH:
+        raise Blocked("command substitutions nested too deeply to check.")
+    if not needs_check(cmd):
         return
-    cleaned, bodies = preprocess(cmd)
-    if any(contains_commit(b) for b in bodies):
-        raise Blocked("git commit inside a $(...) or `...` substitution. "
-                      "Run the commit as its own command.")
+    cleaned, substs, docs = preprocess(cmd)
+    for body in substs:
+        check_commits(body, session_cwd, depth + 1, inside=True)
+    for doc in docs:
+        if not doc.quoted and has_expansion(doc.body) and mentions_commit(doc.body):
+            raise Blocked("a $(...) or `...` inside an unquoted here-document that says "
+                          "commit. Quote the delimiter (<<'EOF').")
     parts, grouped = split_parts(tokenize(cleaned))
+    plans = [(part, *command_words(part.words)) for part in parts]
+    if mentions_commit(cmd):
+        # These can hide a commit behind a name that doesn't say git.
+        if grouped:
+            raise Blocked("a ( ) subshell, group or function in a command that says commit. "
+                          "Run `cd <worktree> && git commit ...` on its own.")
+        if any(words and words[0] in CONTROL_WORDS for _, _, words in plans):
+            raise Blocked("shell control flow, an alias or a trap in a command that says "
+                          "commit. Run `cd <worktree> && git commit ...` on its own.")
+    hazard = re.search(r"\bGIT_(DIR|WORK_TREE)\b|\bCDPATH\b", cleaned)
 
-    plans: list[tuple[Part, list[str], list[str]]] = []
-    commit_seen = False
-    for part in parts:
-        assigns, words = command_words(part.words)
-        plans.append((part, assigns, words))
-        if COMMIT_MENTION.search(" ".join(part.words)) or (
-            words and has_expansion(words[0]) and "commit" in words
-        ):
-            commit_seen = True
-    # These can hide a commit behind a name that doesn't say git (a function,
-    # an alias), so they block whenever the command says `commit` at all.
-    if grouped:
-        raise Blocked("a ( ) subshell, group or function in a command that says commit. "
-                      "Run `cd <worktree> && git commit ...` on its own.")
-    if any(words and words[0] in SHELL_KEYWORDS | {"alias"} for _, _, words in plans):
-        raise Blocked("shell control flow or an alias in a command that says commit. "
-                      "Run `cd <worktree> && git commit ...` on its own.")
-    if not commit_seen:
-        return
-    if re.search(r"\bGIT_(DIR|WORK_TREE)\b|\bCDPATH\b", cleaned):
-        raise Blocked("GIT_DIR, GIT_WORK_TREE or CDPATH in a command with a git commit.")
-    if os.environ.get("GIT_DIR") or os.environ.get("GIT_WORK_TREE"):
-        raise Blocked("GIT_DIR or GIT_WORK_TREE is set in the environment.")
+    def commit_in(target: str | Unknown) -> None:
+        if inside:
+            raise Blocked("git commit inside a $(...) or `...` substitution. "
+                          "Run the commit as its own command.")
+        if hazard:
+            raise Blocked("GIT_DIR, GIT_WORK_TREE or CDPATH in a command with a git commit.")
+        if os.environ.get("GIT_DIR") or os.environ.get("GIT_WORK_TREE"):
+            raise Blocked("GIT_DIR or GIT_WORK_TREE is set in the environment.")
+        judge(target)
 
     cwd: str | Unknown = session_cwd
     for part, assigns, words in plans:
-        if not words:
-            continue
-        name = words[0]
+        name = words[0] if words else ""
         if name == "cd":
             if part.in_pipeline_or_background:
                 cwd = Unknown("`cd` in a pipeline or background job")
@@ -500,17 +538,25 @@ def check_commits(cmd: str, session_cwd: str) -> None:
                 cwd = Unknown("`cd` with a variable assignment")
             else:
                 cwd = apply_cd(words[1:], cwd)
-        elif is_git(name):
+        elif is_git(name):  # its here-docs and substitutions are data (a message)
             target = git_commit_target(assigns, words[1:], cwd)
             if target is not None:
-                judge(target)
-        elif COMMIT_MENTION.search(" ".join(part.words)):
-            if name in COMMAND_RUNNERS:
-                raise Blocked(f"a git commit run through `{name}`. "
-                              "Run `cd <worktree> && git commit ...` directly.")
-            judge(cwd)  # some other program mentions git commit: judge as before
-        elif has_expansion(name) and "commit" in words:
-            raise Blocked(f"the command name is an expansion ({name}) next to `commit`.")
+                commit_in(target)
+        else:
+            # Text this command may run as code: here-doc bodies (unless `cat`
+            # just prints them) and the output of substitutions in its words.
+            prints = name == "cat" and not part.redirects_out and not part.piped_onward
+            code = [] if prints else [docs[i].body for i in part.heredocs]
+            code += [substs[int(n)] for w in part.words for n in SUBST_WORD.findall(w)]
+            if COMMIT_MENTION.search(" ".join(part.words)) or any(
+                COMMIT_MENTION.search(unquoted(text)) for text in code
+            ):
+                if name in COMMAND_RUNNERS or (part.heredocs and part.piped_onward):
+                    raise Blocked(f"a git commit run through `{name or '<<'}`. "
+                                  "Run `cd <worktree> && git commit ...` directly.")
+                commit_in(cwd)  # another program mentions git commit: judge as before
+            elif has_expansion(name) and "commit" in words:
+                raise Blocked(f"the command name is an expansion ({name}) next to `commit`.")
         if name in DIR_CHANGERS:
             cwd = Unknown(f"`{name}` can change the directory")
 
@@ -544,6 +590,12 @@ def main() -> int:
     except Blocked as e:
         print(f"BLOCKED by git-guardrails: {e}\nCommand: {cmd.strip()}", file=sys.stderr)
         return 2
+    except Exception as e:  # never fail open on a commit (exit 1 would let it run)
+        if mentions_commit(cmd):
+            print(f"BLOCKED by git-guardrails: the hook could not analyse this command "
+                  f"({type(e).__name__}), and it says commit.\nCommand: {cmd.strip()}",
+                  file=sys.stderr)
+            return 2
     return 0
 
 
